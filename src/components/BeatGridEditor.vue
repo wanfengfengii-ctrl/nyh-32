@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { usePatternStore } from '@/stores/pattern'
 import { storeToRefs } from 'pinia'
 import { useMessage } from 'naive-ui'
 
 const store = usePatternStore()
 const message = useMessage()
-const { colors, currentColor, warpCount, weftCycle, currentColorId, activeLayer, composedGrid, canUndo, canRedo } = storeToRefs(store)
+const { colors, currentColor, warpCount, weftCycle, currentColorId, activeLayer, layers, canUndo, canRedo, clipboard } = storeToRefs(store)
 
 const isDrawing = ref(false)
 const drawMode = ref<'paint' | 'erase'>('paint')
@@ -15,6 +15,9 @@ const isSelecting = ref(false)
 const selectionStart = ref<{ row: number; col: number } | null>(null)
 const selectionEnd = ref<{ row: number; col: number } | null>(null)
 const showTransformTools = ref(true)
+
+const isPastingMode = ref(false)
+const pastePreviewPos = ref<{ row: number; col: number } | null>(null)
 
 const colorMap = computed(() => {
   const map = new Map<string, string>()
@@ -33,12 +36,70 @@ const selectionRect = computed(() => {
 
 const isLayerLocked = computed(() => activeLayer.value?.locked)
 
+const referenceGrid = computed(() => {
+  if (!activeLayer.value) return null
+  const activeId = activeLayer.value.id
+  const activeOrder = activeLayer.value.order
+  const visibleBelow = layers.value.filter(
+    l => l.visible && l.id !== activeId && l.order < activeOrder
+  )
+  if (visibleBelow.length === 0) return null
+
+  const grid: (string | null)[][] = []
+  for (let r = 0; r < weftCycle.value; r++) {
+    const row: (string | null)[] = []
+    for (let c = 0; c < warpCount.value; c++) {
+      let val: string | null = null
+      for (const layer of visibleBelow) {
+        if (layer.grid[r]?.[c] !== null) {
+          val = layer.grid[r][c]
+          break
+        }
+      }
+      row.push(val)
+    }
+    grid.push(row)
+  }
+  return grid
+})
+
 function getCellColor(cellValue: string | null): string {
   if (cellValue === null) return 'transparent'
   return colorMap.value.get(cellValue) || 'transparent'
 }
 
+function getReferenceColor(row: number, col: number): string {
+  if (!referenceGrid.value) return 'transparent'
+  const val = referenceGrid.value[row]?.[col]
+  if (val === null || val === undefined) return 'transparent'
+  return colorMap.value.get(val) || 'transparent'
+}
+
+const clipboardRows = computed(() => clipboard.value?.length ?? 0)
+const clipboardCols = computed(() => clipboard.value?.[0]?.length ?? 0)
+
+function getPastePreviewColor(row: number, col: number): string {
+  if (!isPastingMode.value || !pastePreviewPos.value || !clipboard.value) return 'transparent'
+  const clip = clipboard.value
+  const relRow = row - pastePreviewPos.value.row
+  const relCol = col - pastePreviewPos.value.col
+  if (relRow < 0 || relRow >= clip.length || relCol < 0 || relCol >= (clip[0]?.length ?? 0)) return 'transparent'
+  const val = clip[relRow]?.[relCol]
+  if (val === null || val === undefined) return 'transparent'
+  return colorMap.value.get(val) || 'transparent'
+}
+
 function handleMouseDown(row: number, col: number, event: MouseEvent) {
+  if (isPastingMode.value) {
+    event.preventDefault()
+    if (event.button === 0) {
+      doPaste(row, col)
+    } else if (event.button === 2) {
+      cancelPasteMode()
+    }
+    return
+  }
+
   if (isLayerLocked.value) {
     message.warning('当前图层已锁定，无法编辑')
     return
@@ -59,20 +120,17 @@ function handleMouseDown(row: number, col: number, event: MouseEvent) {
     return
   }
 
-  if (event.ctrlKey || event.metaKey) {
-    if (store.hasClipboardData()) {
-      store.pasteSelection(row, col)
-      message.success('已粘贴')
-    }
-    return
-  }
-
   isDrawing.value = true
   drawMode.value = 'paint'
   store.setCell(row, col, currentColorId.value)
 }
 
 function handleMouseEnter(row: number, col: number) {
+  if (isPastingMode.value) {
+    pastePreviewPos.value = { row, col }
+    return
+  }
+
   if (isLayerLocked.value) return
 
   if (isSelecting.value) {
@@ -114,14 +172,26 @@ function isInSelection(row: number, col: number): boolean {
   return row >= startRow && row <= endRow && col >= startCol && col <= endCol
 }
 
+function isInPastePreview(row: number, col: number): boolean {
+  if (!isPastingMode.value || !pastePreviewPos.value || !clipboard.value) return false
+  const clip = clipboard.value
+  const relRow = row - pastePreviewPos.value.row
+  const relCol = col - pastePreviewPos.value.col
+  return relRow >= 0 && relRow < clip.length && relCol >= 0 && relCol < (clip[0]?.length ?? 0) &&
+    clip[relRow]?.[relCol] !== null
+}
+
 function fillSelection() {
   if (!selectionRect.value || isLayerLocked.value) return
   const { startRow, endRow, startCol, endCol } = selectionRect.value
+  store.pauseHistory()
   for (let r = startRow; r <= endRow; r++) {
     for (let c = startCol; c <= endCol; c++) {
       store.setCell(r, c, currentColorId.value)
     }
   }
+  store.resumeHistory()
+  store.saveHistory()
   clearSelection()
   message.success('已填充选区')
 }
@@ -152,18 +222,40 @@ function handlePaste() {
     message.warning('当前图层已锁定')
     return
   }
-  store.pasteSelection(0, 0)
-  message.success('已粘贴到左上角')
+  isPastingMode.value = true
+  clearSelection()
+  message.info('点击网格放置粘贴内容，右键或按 Esc 取消')
+}
+
+function doPaste(row: number, col: number) {
+  if (isLayerLocked.value) {
+    message.warning('当前图层已锁定')
+    cancelPasteMode()
+    return
+  }
+  store.pasteSelection(row, col)
+  isPastingMode.value = false
+  pastePreviewPos.value = null
+  message.success('已粘贴')
+}
+
+function cancelPasteMode() {
+  isPastingMode.value = false
+  pastePreviewPos.value = null
+  message.info('已取消粘贴')
 }
 
 function handleDeleteSelection() {
   if (!selectionRect.value || isLayerLocked.value) return
   const { startRow, endRow, startCol, endCol } = selectionRect.value
+  store.pauseHistory()
   for (let r = startRow; r <= endRow; r++) {
     for (let c = startCol; c <= endCol; c++) {
       store.setCell(r, c, null)
     }
   }
+  store.resumeHistory()
+  store.saveHistory()
   clearSelection()
   message.success('已清除选区')
 }
@@ -273,10 +365,45 @@ function resetZoom() {
 function toggleTransformTools() {
   showTransformTools.value = !showTransformTools.value
 }
+
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    if (isPastingMode.value) {
+      cancelPasteMode()
+    } else if (isSelecting.value || selectionRect.value) {
+      clearSelection()
+    }
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault()
+    if (e.shiftKey) {
+      handleRedo()
+    } else {
+      handleUndo()
+    }
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+    e.preventDefault()
+    handleRedo()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown)
+})
 </script>
 
 <template>
-  <div class="beat-grid-editor" @mouseup="handleMouseUp" @mouseleave="handleMouseLeave">
+  <div
+    class="beat-grid-editor"
+    :class="{ 'pasting-mode': isPastingMode }"
+    @mouseup="handleMouseUp"
+    @mouseleave="handleMouseLeave"
+  >
     <div class="editor-header">
       <div class="editor-title">
         <span class="title-text">节拍网格编辑器</span>
@@ -284,6 +411,9 @@ function toggleTransformTools() {
         <span v-if="activeLayer" class="layer-info">
           当前：{{ activeLayer.name }}
           <span v-if="activeLayer.locked" class="lock-indicator">🔒</span>
+        </span>
+        <span v-if="isPastingMode" class="pasting-indicator">
+          📌 粘贴模式
         </span>
       </div>
       <div class="editor-tools">
@@ -314,7 +444,12 @@ function toggleTransformTools() {
       <span class="label">当前颜色：</span>
       <div class="color-preview" :style="{ backgroundColor: currentColor.value }"></div>
       <span class="color-name">{{ currentColor.name }}</span>
-      <span class="hint">· 左键绘制 · 右键擦除 · Shift+拖拽框选 · Ctrl+点击粘贴</span>
+      <span class="hint" v-if="!isPastingMode">
+        · 左键绘制 · 右键擦除 · Shift+拖拽框选 · 点击粘贴后选位置
+      </span>
+      <span class="hint" v-else>
+        · 左键确认放置 · 右键/Esc 取消
+      </span>
     </div>
 
     <div class="transform-bar">
@@ -354,7 +489,13 @@ function toggleTransformTools() {
           <button class="transform-btn" :disabled="!selectionRect" @click="handleCopy" title="复制选区">
             ⎘ 复制
           </button>
-          <button class="transform-btn" :disabled="!store.hasClipboardData() || isLayerLocked" @click="handlePaste" title="粘贴">
+          <button
+            class="transform-btn paste-btn"
+            :class="{ active: isPastingMode }"
+            :disabled="!store.hasClipboardData() || isLayerLocked"
+            @click="handlePaste"
+            title="粘贴（点击进入粘贴模式）"
+          >
             ⎙ 粘贴
           </button>
           <button class="transform-btn" :disabled="!selectionRect || isLayerLocked" @click="fillSelection" title="填充选区">
@@ -377,7 +518,7 @@ function toggleTransformTools() {
           }"
         >
           <div
-            v-for="(row, rowIndex) in composedGrid"
+            v-for="(row, rowIndex) in activeLayer?.grid || []"
             :key="'row-' + rowIndex"
             class="grid-row"
           >
@@ -388,17 +529,32 @@ function toggleTransformTools() {
               :class="{
                 'has-color': cell !== null,
                 'in-selection': isInSelection(rowIndex, colIndex),
-                'locked': isLayerLocked
+                'locked': isLayerLocked,
+                'pasting-mode': isPastingMode,
+                'paste-preview': isInPastePreview(rowIndex, colIndex)
               }"
               :style="{
-                backgroundColor: getCellColor(cell),
                 width: cellSize + 'px',
                 height: cellSize + 'px'
               }"
               @mousedown="handleMouseDown(rowIndex, colIndex, $event)"
               @mouseenter="handleMouseEnter(rowIndex, colIndex)"
             >
-              <div v-if="cell === null" class="empty-cell"></div>
+              <div
+                v-if="referenceGrid"
+                class="reference-layer"
+                :style="{ backgroundColor: getReferenceColor(rowIndex, colIndex) }"
+              ></div>
+              <div
+                class="current-layer"
+                :style="{ backgroundColor: getCellColor(cell) }"
+              ></div>
+              <div
+                v-if="isInPastePreview(rowIndex, colIndex)"
+                class="paste-preview-layer"
+                :style="{ backgroundColor: getPastePreviewColor(rowIndex, colIndex) }"
+              ></div>
+              <div v-if="cell === null && !referenceGrid?.[rowIndex]?.[colIndex]" class="empty-cell"></div>
             </div>
           </div>
         </div>
@@ -429,6 +585,12 @@ function toggleTransformTools() {
   padding: 20px;
   box-shadow: 0 2px 12px rgba(61, 44, 30, 0.08);
   position: relative;
+
+  &.pasting-mode {
+    .grid-container {
+      cursor: crosshair;
+    }
+  }
 }
 
 .editor-header {
@@ -475,6 +637,21 @@ function toggleTransformTools() {
       font-size: 11px;
     }
   }
+
+  .pasting-indicator {
+    font-size: 12px;
+    color: #2d7a4a;
+    background: #e8f5ee;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-weight: 500;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 .editor-tools {
@@ -642,6 +819,12 @@ function toggleTransformTools() {
     color: #c84b31;
   }
 
+  &.paste-btn.active {
+    background: #e8f5ee;
+    border-color: #2d7a4a;
+    color: #2d7a4a;
+  }
+
   &:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -691,6 +874,7 @@ function toggleTransformTools() {
   cursor: crosshair;
   transition: transform 0.1s ease, box-shadow 0.15s ease;
   background: #fff;
+  overflow: hidden;
 
   &:hover {
     z-index: 2;
@@ -714,6 +898,38 @@ function toggleTransformTools() {
     }
   }
 
+  &.paste-preview {
+    box-shadow: 0 0 0 2px #2d7a4a inset;
+  }
+
+  &.pasting-mode {
+    cursor: crosshair;
+  }
+
+  .reference-layer,
+  .current-layer,
+  .paste-preview-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+  }
+
+  .reference-layer {
+    opacity: 0.3;
+  }
+
+  .current-layer {
+    z-index: 1;
+  }
+
+  .paste-preview-layer {
+    z-index: 2;
+    opacity: 0.6;
+    animation: paste-blink 0.8s ease-in-out infinite;
+  }
+
   .empty-cell {
     position: absolute;
     top: 50%;
@@ -724,7 +940,13 @@ function toggleTransformTools() {
     border-radius: 50%;
     background: #d4c8b8;
     opacity: 0.5;
+    z-index: 0;
   }
+}
+
+@keyframes paste-blink {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.8; }
 }
 
 @keyframes pop-in {

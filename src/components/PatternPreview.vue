@@ -5,15 +5,11 @@ import { storeToRefs } from 'pinia'
 import { generatePreviewGrid } from '@/utils/pattern'
 
 const store = usePatternStore()
-const { composedGrid, colors, warpCount, weftCycle, previewRepeat, sortedLayers } = storeToRefs(store)
+const { sortedLayers, colors, warpCount, weftCycle, previewRepeat } = storeToRefs(store)
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const containerRef = ref<HTMLDivElement | null>(null)
 const cellSize = ref(10)
-
-const previewGrid = computed(() => {
-  return generatePreviewGrid(composedGrid.value, previewRepeat.value)
-})
 
 const colorMap = computed(() => {
   const map = new Map<string, string>()
@@ -44,22 +40,40 @@ function renderCanvas() {
 
   ctx.clearRect(0, 0, width, height)
 
-  const pg = previewGrid.value
-  for (let row = 0; row < pg.length; row++) {
-    for (let col = 0; col < pg[row].length; col++) {
-      const cell = pg[row][col]
-      if (cell !== null) {
-        const color = colorMap.value.get(cell)
-        if (color) {
-          ctx.fillStyle = color
-          ctx.fillRect(col * cellSize.value, row * cellSize.value, cellSize.value, cellSize.value)
+  ctx.fillStyle = '#f8f5f0'
+  ctx.fillRect(0, 0, width, height)
+
+  const visibleLayers = sortedLayers.value.filter(l => l.visible)
+
+  for (const layer of visibleLayers) {
+    const alpha = layer.opacity / 100
+    if (alpha <= 0) continue
+
+    ctx.globalAlpha = alpha
+
+    for (let repeat = 0; repeat < previewRepeat.value; repeat++) {
+      const rowOffset = repeat * weftCycle.value * cellSize.value
+      for (let row = 0; row < weftCycle.value; row++) {
+        for (let col = 0; col < warpCount.value; col++) {
+          const cell = layer.grid[row]?.[col]
+          if (cell !== null) {
+            const color = colorMap.value.get(cell)
+            if (color) {
+              ctx.fillStyle = color
+              ctx.fillRect(
+                col * cellSize.value,
+                rowOffset + row * cellSize.value,
+                cellSize.value,
+                cellSize.value
+              )
+            }
+          }
         }
-      } else {
-        ctx.fillStyle = '#f8f5f0'
-        ctx.fillRect(col * cellSize.value, row * cellSize.value, cellSize.value, cellSize.value)
       }
     }
   }
+
+  ctx.globalAlpha = 1
 
   ctx.strokeStyle = 'rgba(212, 200, 184, 0.5)'
   ctx.lineWidth = 0.5
@@ -104,7 +118,7 @@ function handleRepeatChange(value: number) {
 }
 
 watch(
-  [composedGrid, colors, previewRepeat, warpCount, weftCycle],
+  [sortedLayers, colors, previewRepeat, warpCount, weftCycle],
   () => {
     nextTick(renderCanvas)
   },
