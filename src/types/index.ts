@@ -27,6 +27,7 @@ export interface PatternSchema {
   activeLayerId: string
   createdAt: string
   updatedAt: string
+  processScheduling?: ProcessSchedulingModule
 }
 
 export interface ConsumptionItem {
@@ -48,7 +49,67 @@ export interface ValidationResult {
   errors: string[]
 }
 
-export const SCHEMA_VERSION = '2.0.0'
+export const SCHEMA_VERSION = '2.1.0'
+
+export interface LayerProcessInfo {
+  layerId: string
+  layerName: string
+  description: string
+  cellCount: number
+}
+
+export interface ProcessSheetData {
+  name: string
+  warpCount: number
+  weftCycle: number
+  totalCells: number
+  filledCells: number
+  fillRate: number
+  colors: ColorItem[]
+  usedColors: ColorItem[]
+  layers: LayerProcessInfo[]
+  totalConsumption: ConsumptionItem[]
+  layerConsumptions: LayerConsumption[]
+  suggestedRepeats: number
+  totalWarpBeats: number
+  totalWeftBeats: number
+  operationNotes: string[]
+  createdAt: string
+}
+
+export interface SchedulingStep {
+  id: string
+  stepIndex: number
+  beatIndex: number
+  repeatIndex: number
+  colorId: string
+  colorName: string
+  colorValue: string
+  description: string
+  warpPositions: number[]
+  completed: boolean
+}
+
+export interface SchedulingData {
+  steps: SchedulingStep[]
+  currentStepIndex: number
+  filterColorId: string | null
+  repeatCount: number
+  completedCount: number
+  totalCount: number
+}
+
+export interface SchedulingState {
+  completedStepIds: string[]
+  currentStepId: string | null
+  filterColorId: string | null
+  repeatCount: number
+}
+
+export interface ProcessSchedulingModule {
+  scheduling: SchedulingState
+  notes: string[]
+}
 
 export const DEFAULT_COLORS: ColorItem[] = [
   { id: 'color-1', name: '米白', value: '#F5F0E6' },

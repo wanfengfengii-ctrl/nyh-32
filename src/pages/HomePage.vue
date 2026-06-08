@@ -1,14 +1,23 @@
 <script setup lang="ts">
 import { NConfigProvider, NMessageProvider, darkTheme, zhCN, dateZhCN } from 'naive-ui'
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import HeaderBar from '@/components/HeaderBar.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import BeatGridEditor from '@/components/BeatGridEditor.vue'
 import PatternPreview from '@/components/PatternPreview.vue'
 import ConsumptionChart from '@/components/ConsumptionChart.vue'
 import LayerPanel from '@/components/LayerPanel.vue'
+import ProcessSheetPanel from '@/components/ProcessSheetPanel.vue'
+import SchedulingView from '@/components/SchedulingView.vue'
 
 const theme = computed(() => undefined)
+
+type RightPanelTab = 'preview' | 'process' | 'scheduling'
+const activeRightTab = ref<RightPanelTab>('preview')
+
+function switchRightTab(tab: RightPanelTab) {
+  activeRightTab.value = tab
+}
 </script>
 
 <template>
@@ -29,8 +38,45 @@ const theme = computed(() => undefined)
             </section>
 
             <aside class="right-panel">
-              <PatternPreview />
-              <ConsumptionChart />
+              <div class="right-panel-tabs">
+                <button
+                  class="tab-btn"
+                  :class="{ active: activeRightTab === 'preview' }"
+                  @click="switchRightTab('preview')"
+                >
+                  <span class="tab-icon">👁</span>
+                  预览消耗
+                </button>
+                <button
+                  class="tab-btn"
+                  :class="{ active: activeRightTab === 'process' }"
+                  @click="switchRightTab('process')"
+                >
+                  <span class="tab-icon">📋</span>
+                  工艺单
+                </button>
+                <button
+                  class="tab-btn"
+                  :class="{ active: activeRightTab === 'scheduling' }"
+                  @click="switchRightTab('scheduling')"
+                >
+                  <span class="tab-icon">🧵</span>
+                  生产排线
+                </button>
+              </div>
+
+              <div class="right-panel-content">
+                <div v-show="activeRightTab === 'preview'" class="tab-content">
+                  <PatternPreview />
+                  <ConsumptionChart />
+                </div>
+                <div v-show="activeRightTab === 'process'" class="tab-content">
+                  <ProcessSheetPanel />
+                </div>
+                <div v-show="activeRightTab === 'scheduling'" class="tab-content">
+                  <SchedulingView />
+                </div>
+              </div>
             </aside>
           </div>
         </main>
@@ -82,9 +128,61 @@ const theme = computed(() => undefined)
 .right-panel {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 0;
   position: sticky;
   top: 24px;
+
+  .right-panel-tabs {
+    display: flex;
+    background: #fff;
+    border-radius: 12px 12px 0 0;
+    padding: 6px;
+    box-shadow: 0 2px 8px rgba(61, 44, 30, 0.06);
+    border-bottom: 1px solid #f0ebe4;
+    position: relative;
+    z-index: 1;
+
+    .tab-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      padding: 8px 4px;
+      border: none;
+      background: transparent;
+      color: #8b7355;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      border-radius: 8px;
+      transition: all 0.2s ease;
+
+      .tab-icon {
+        font-size: 18px;
+      }
+
+      &:hover {
+        color: #6b5b47;
+        background: #faf7f2;
+      }
+
+      &.active {
+        background: #fff5f2;
+        color: #c84b31;
+        font-weight: 600;
+      }
+    }
+  }
+
+  .right-panel-content {
+    .tab-content {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding-top: 16px;
+    }
+  }
 }
 
 .app-footer {
@@ -125,12 +223,14 @@ const theme = computed(() => undefined)
   }
 
   .right-panel {
-    flex-direction: row;
-    flex-wrap: wrap;
+    .right-panel-content {
+      .tab-content {
+        flex-direction: column;
 
-    > * {
-      flex: 1;
-      min-width: 280px;
+        > * {
+          min-width: 280px;
+        }
+      }
     }
   }
 }

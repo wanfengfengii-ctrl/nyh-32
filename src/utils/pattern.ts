@@ -1,4 +1,15 @@
-import type { BeatGrid, ColorItem, ConsumptionItem, LayerItem } from '@/types'
+import type {
+  BeatGrid,
+  ColorItem,
+  ConsumptionItem,
+  LayerItem,
+  LayerConsumption,
+  LayerProcessInfo,
+  ProcessSheetData,
+  SchedulingStep,
+  SchedulingData,
+  SchedulingState
+} from '@/types'
 
 export function createEmptyGrid(warpCount: number, weftCycle: number): BeatGrid {
   const grid: BeatGrid = []
@@ -277,4 +288,228 @@ export function readJsonFile(file: File): Promise<unknown> {
     }
     reader.readAsText(file)
   })
+}
+
+export function calculateLayerProcessInfo(
+  layers: LayerItem[],
+  warpCount: number,
+  weftCycle: number
+): LayerProcessInfo[] {
+  const sortedLayers = [...layers].sort((a, b) => a.order - b.order)
+
+  return sortedLayers.map(layer => {
+    let cellCount = 0
+    layer.grid.forEach(row => {
+      row.forEach(cell => {
+        if (cell !== null) cellCount++
+      })
+    })
+
+    return {
+      layerId: layer.id,
+      layerName: layer.name,
+      description: layer.visible ? '可见图层' : '隐藏图层',
+      cellCount
+    }
+  })
+}
+
+export function getUsedColors(
+  grid: BeatGrid,
+  colors: ColorItem[]
+): ColorItem[] {
+  const usedColorIds = new Set<string>()
+  grid.forEach(row => {
+    row.forEach(cell => {
+      if (cell !== null) usedColorIds.add(cell)
+    })
+  })
+  return colors.filter(c => usedColorIds.has(c.id))
+}
+
+export function calculateSuggestedRepeats(
+  warpCount: number,
+  weftCycle: number,
+  filledCells: number
+): number {
+  if (filledCells === 0) return 1
+  const baseRepeats = Math.ceil(100 / weftCycle)
+  return Math.max(1, Math.min(50, baseRepeats))
+}
+
+export function generateOperationNotes(
+  warpCount: number,
+  weftCycle: number,
+  colorCount: number,
+  layerCount: number
+): string[] {
+  const notes: string[] = []
+
+  notes.push(`经线数量为 ${warpCount} 根，请根据设计调整经线张力。`)
+  notes.push(`纬线循环周期为 ${weftCycle} 行，完整纹样重复 ${weftCycle} 行后回到起始位置。`)
+
+  if (colorCount > 3) {
+    notes.push(`共使用 ${colorCount} 种颜色，建议提前按顺序备好线轴。`)
+  }
+
+  if (layerCount > 1) {
+    notes.push(`纹样包含 ${layerCount} 个图层，请注意叠层顺序和遮挡关系。`)
+  }
+
+  notes.push('编织时请保持均匀力度，避免线材松紧不一。')
+  notes.push('建议先编织小样验证效果，再进行大批量生产。')
+
+  return notes
+}
+
+export function generateProcessSheet(
+  name: string,
+  warpCount: number,
+  weftCycle: number,
+  colors: ColorItem[],
+  layers: LayerItem[],
+  composedGrid: BeatGrid,
+  totalConsumption: ConsumptionItem[],
+  layerConsumptions: LayerConsumption[]
+): ProcessSheetData {
+  const totalCells = warpCount * weftCycle
+  let filledCells = 0
+  composedGrid.forEach(row => {
+    row.forEach(cell => {
+      if (cell !== null) filledCells++
+    })
+  })
+
+  const usedColors = getUsedColors(composedGrid, colors)
+  const layerInfos = calculateLayerProcessInfo(layers, warpCount, weftCycle)
+  const suggestedRepeats = calculateSuggestedRepeats(warpCount, weftCycle, filledCells)
+  const operationNotes = generateOperationNotes(warpCount, weftCycle, usedColors.length, layers.length)
+
+  return {
+    name,
+    warpCount,
+    weftCycle,
+    totalCells,
+    filledCells,
+    fillRate: totalCells > 0 ? filledCells / totalCells : 0,
+    colors: [...colors],
+    usedColors,
+    layers: layerInfos,
+    totalConsumption,
+    layerConsumptions,
+    suggestedRepeats,
+    totalWarpBeats: warpCount,
+    totalWeftBeats: weftCycle * suggestedRepeats,
+    operationNotes,
+    createdAt: new Date().toISOString()
+  }
+}
+
+export function generateSchedulingSteps(
+  composedGrid: BeatGrid,
+  colors: ColorItem[],
+  repeatCount: number
+): SchedulingStep[] {
+  const steps: SchedulingStep[] = []
+  const weftCycle = composedGrid.length
+  const warpCount = composedGrid[0]?.length || 0
+  const colorMap = new Map<string, ColorItem>()
+  colors.forEach(c => colorMap.set(c.id, c))
+
+  let stepIndex = 0
+
+  for (let repeat = 0; repeat < repeatCount; repeat++) {
+    for (let beat = 0; beat < weftCycle; beat++) {
+      const row = composedGrid[beat]
+      const colorPositions = new Map<string, number[]>()
+
+      for (let col = 0; col < warpCount; col++) {
+        const colorId = row[col]
+        if (colorId !== null) {
+          if (!colorPositions.has(colorId)) {
+            colorPositions.set(colorId, [])
+          }
+          colorPositions.get(colorId)!.push(col + 1)
+        }
+      }
+
+      for (const [colorId, positions] of colorPositions) {
+        const color = colorMap.get(colorId)
+        if (!color) continue
+
+        const description = `第 ${repeat + 1} 轮 · 第 ${beat + 1} 排 · ${color.name} · 共 ${positions.length} 根经线`
+
+        steps.push({
+          id: `step-${repeat}-${beat}-${colorId}`,
+          stepIndex,
+          beatIndex: beat,
+          repeatIndex: repeat,
+          colorId,
+          colorName: color.name,
+          colorValue: color.value,
+          description,
+          warpPositions: positions,
+          completed: false
+        })
+        stepIndex++
+      }
+    }
+  }
+
+  return steps
+}
+
+export function buildSchedulingData(
+  steps: SchedulingStep[],
+  state: SchedulingState
+): SchedulingData {
+  const completedSet = new Set(state.completedStepIds)
+  const stepsWithStatus = steps.map(step => ({
+    ...step,
+    completed: completedSet.has(step.id)
+  }))
+
+  const filteredSteps = state.filterColorId
+    ? stepsWithStatus.filter(s => s.colorId === state.filterColorId)
+    : stepsWithStatus
+
+  const currentStepIndex = state.currentStepId
+    ? Math.max(0, filteredSteps.findIndex(s => s.id === state.currentStepId))
+    : 0
+
+  const completedCount = stepsWithStatus.filter(s => s.completed).length
+
+  return {
+    steps: filteredSteps,
+    currentStepIndex,
+    filterColorId: state.filterColorId,
+    repeatCount: state.repeatCount,
+    completedCount,
+    totalCount: steps.length
+  }
+}
+
+export function exportSchedulingAsJson(
+  steps: SchedulingStep[],
+  processSheet: ProcessSheetData
+): void {
+  const data = {
+    processSheet,
+    scheduling: {
+      repeatCount: Math.ceil(steps.length / (processSheet.weftCycle * Math.max(1, processSheet.usedColors.length))),
+      totalSteps: steps.length,
+      steps
+    }
+  }
+  const filename = `排线方案-${processSheet.name}-${Date.now()}.json`
+  downloadJsonFile(data, filename)
+}
+
+export function defaultSchedulingState(): SchedulingState {
+  return {
+    completedStepIds: [],
+    currentStepId: null,
+    filterColorId: null,
+    repeatCount: 6
+  }
 }

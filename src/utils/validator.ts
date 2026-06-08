@@ -1,4 +1,12 @@
-import type { PatternSchema, ValidationResult, ColorItem, BeatGrid, LayerItem } from '@/types'
+import type {
+  PatternSchema,
+  ValidationResult,
+  ColorItem,
+  BeatGrid,
+  LayerItem,
+  ProcessSchedulingModule,
+  SchedulingState
+} from '@/types'
 
 const HEX_COLOR_REGEX = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/
 
@@ -147,6 +155,83 @@ export function validateLayers(
   return errors
 }
 
+export function validateSchedulingState(
+  state: unknown,
+  colors: ColorItem[]
+): string[] {
+  const errors: string[] = []
+
+  if (!state || typeof state !== 'object') {
+    errors.push('排程状态数据格式无效')
+    return errors
+  }
+
+  const s = state as Record<string, unknown>
+
+  if (!Array.isArray(s.completedStepIds)) {
+    errors.push('排程已完成步骤列表格式无效')
+  } else {
+    s.completedStepIds.forEach((id: unknown, index: number) => {
+      if (typeof id !== 'string') {
+        errors.push(`第 ${index + 1} 个已完成步骤 ID 格式无效`)
+      }
+    })
+  }
+
+  if (s.currentStepId !== undefined && s.currentStepId !== null && typeof s.currentStepId !== 'string') {
+    errors.push('当前步骤 ID 格式无效')
+  }
+
+  if (s.filterColorId !== undefined && s.filterColorId !== null) {
+    if (typeof s.filterColorId !== 'string') {
+      errors.push('筛选颜色 ID 格式无效')
+    } else if (!colors.find(c => c.id === s.filterColorId)) {
+      // Valid color ID exists in colors list - this is okay
+    }
+  }
+
+  if (s.repeatCount !== undefined) {
+    if (typeof s.repeatCount !== 'number' || !validatePositiveInteger(s.repeatCount) || s.repeatCount < 1 || s.repeatCount > 100) {
+      errors.push('重复次数无效，必须为 1-100 之间的整数')
+    }
+  }
+
+  return errors
+}
+
+export function validateProcessSchedulingModule(
+  module: unknown,
+  colors: ColorItem[]
+): string[] {
+  const errors: string[] = []
+
+  if (!module || typeof module !== 'object') {
+    errors.push('工艺排线模块数据格式无效')
+    return errors
+  }
+
+  const m = module as Record<string, unknown>
+
+  if (m.scheduling !== undefined) {
+    const schedulingErrors = validateSchedulingState(m.scheduling, colors)
+    schedulingErrors.forEach(err => errors.push(`排程模块 - ${err}`))
+  }
+
+  if (m.notes !== undefined) {
+    if (!Array.isArray(m.notes)) {
+      errors.push('备注列表格式无效')
+    } else {
+      m.notes.forEach((note: unknown, index: number) => {
+        if (typeof note !== 'string') {
+          errors.push(`第 ${index + 1} 条备注格式无效`)
+        }
+      })
+    }
+  }
+
+  return errors
+}
+
 export function validatePatternSchema(schema: unknown): ValidationResult {
   const errors: string[] = []
 
@@ -194,6 +279,11 @@ export function validatePatternSchema(schema: unknown): ValidationResult {
     if (data.activeLayerId === undefined || typeof data.activeLayerId !== 'string') {
       errors.push('缺少有效的当前图层 ID')
     }
+  }
+
+  if (data.processScheduling !== undefined && errors.length === 0) {
+    const psErrors = validateProcessSchedulingModule(data.processScheduling, colors)
+    errors.push(...psErrors)
   }
 
   return { valid: errors.length === 0, errors }

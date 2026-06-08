@@ -1,6 +1,18 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import type { ColorItem, BeatGrid, PatternSchema, ConsumptionItem, LayerItem, LayerConsumption } from '@/types'
+import { ref, computed, watch } from 'vue'
+import type {
+  ColorItem,
+  BeatGrid,
+  PatternSchema,
+  ConsumptionItem,
+  LayerItem,
+  LayerConsumption,
+  ProcessSheetData,
+  SchedulingStep,
+  SchedulingData,
+  SchedulingState,
+  ProcessSchedulingModule
+} from '@/types'
 import { DEFAULT_COLORS, SCHEMA_VERSION } from '@/types'
 import {
   createEmptyGrid,
@@ -18,7 +30,12 @@ import {
   shiftVertical,
   copyRegion,
   pasteRegion,
-  generateLayerId
+  generateLayerId,
+  generateProcessSheet,
+  generateSchedulingSteps,
+  buildSchedulingData,
+  defaultSchedulingState,
+  exportSchedulingAsJson
 } from '@/utils/pattern'
 import { validatePatternSchema, generateColorId, validatePositiveInteger, validateOpacity } from '@/utils/validator'
 
@@ -48,6 +65,9 @@ export const usePatternStore = defineStore('pattern', () => {
 
   const layers = ref<LayerItem[]>([createDefaultLayer(16, 8, '图层 1', 0)])
   const activeLayerId = ref(layers.value[0].id)
+
+  const schedulingState = ref<SchedulingState>(defaultSchedulingState())
+  const processNotes = ref<string[]>([])
 
   const history = ref<HistoryState[]>([])
   const historyIndex = ref(-1)
@@ -91,6 +111,31 @@ export const usePatternStore = defineStore('pattern', () => {
       })
     })
     return count
+  })
+
+  const processSheet = computed<ProcessSheetData>(() => {
+    return generateProcessSheet(
+      schemaName.value,
+      warpCount.value,
+      weftCycle.value,
+      colors.value,
+      layers.value,
+      composedGrid.value,
+      consumptionStats.value,
+      layerConsumptions.value
+    )
+  })
+
+  const schedulingSteps = computed<SchedulingStep[]>(() => {
+    return generateSchedulingSteps(
+      composedGrid.value,
+      colors.value,
+      schedulingState.value.repeatCount
+    )
+  })
+
+  const schedulingData = computed<SchedulingData>(() => {
+    return buildSchedulingData(schedulingSteps.value, schedulingState.value)
   })
 
   const canUndo = computed(() => historyIndex.value > 0)
@@ -438,7 +483,115 @@ export const usePatternStore = defineStore('pattern', () => {
     return clipboard.value !== null && clipboard.value.length > 0
   }
 
+  function setSchedulingRepeatCount(count: number) {
+    schedulingState.value.repeatCount = Math.max(1, Math.min(100, Math.floor(count)))
+    if (schedulingState.value.currentStepId) {
+      const steps = schedulingSteps.value
+      const currentStep = steps.find(s => s.id === schedulingState.value.currentStepId)
+      if (!currentStep || currentStep.repeatIndex >= schedulingState.value.repeatCount) {
+        schedulingState.value.currentStepId = steps[0]?.id || null
+      }
+    }
+  }
+
+  function setSchedulingFilterColor(colorId: string | null) {
+    schedulingState.value.filterColorId = colorId
+    const filtered = schedulingData.value.steps
+    if (filtered.length > 0 && schedulingState.value.currentStepId) {
+      const exists = filtered.some(s => s.id === schedulingState.value.currentStepId)
+      if (!exists) {
+        schedulingState.value.currentStepId = filtered[0].id
+      }
+    }
+  }
+
+  function setCurrentSchedulingStep(stepId: string) {
+    const steps = schedulingData.value.steps
+    if (steps.find(s => s.id === stepId)) {
+      schedulingState.value.currentStepId = stepId
+    }
+  }
+
+  function toggleStepCompleted(stepId: string) {
+    const idx = schedulingState.value.completedStepIds.indexOf(stepId)
+    if (idx === -1) {
+      schedulingState.value.completedStepIds.push(stepId)
+    } else {
+      schedulingState.value.completedStepIds.splice(idx, 1)
+    }
+  }
+
+  function markStepCompleted(stepId: string) {
+    if (!schedulingState.value.completedStepIds.includes(stepId)) {
+      schedulingState.value.completedStepIds.push(stepId)
+    }
+  }
+
+  function markStepIncomplete(stepId: string) {
+    const idx = schedulingState.value.completedStepIds.indexOf(stepId)
+    if (idx !== -1) {
+      schedulingState.value.completedStepIds.splice(idx, 1)
+    }
+  }
+
+  function goToNextStep() {
+    const steps = schedulingData.value.steps
+    const currentIdx = steps.findIndex(s => s.id === schedulingState.value.currentStepId)
+    if (currentIdx < steps.length - 1) {
+      schedulingState.value.currentStepId = steps[currentIdx + 1].id
+    }
+  }
+
+  function goToPrevStep() {
+    const steps = schedulingData.value.steps
+    const currentIdx = steps.findIndex(s => s.id === schedulingState.value.currentStepId)
+    if (currentIdx > 0) {
+      schedulingState.value.currentStepId = steps[currentIdx - 1].id
+    }
+  }
+
+  function resetSchedulingProgress() {
+    schedulingState.value.completedStepIds = []
+    schedulingState.value.currentStepId = schedulingData.value.steps[0]?.id || null
+  }
+
+  function exportSchedulingJson() {
+    exportSchedulingAsJson(schedulingSteps.value, processSheet.value)
+  }
+
+  function setProcessNotes(notes: string[]) {
+    processNotes.value = [...notes]
+  }
+
+  function addProcessNote(note: string) {
+    if (note.trim()) {
+      processNotes.value.push(note.trim())
+    }
+  }
+
+  function removeProcessNote(index: number) {
+    if (index >= 0 && index < processNotes.value.length) {
+      processNotes.value.splice(index, 1)
+    }
+  }
+
+  function updateProcessNote(index: number, note: string) {
+    if (index >= 0 && index < processNotes.value.length) {
+      processNotes.value[index] = note
+    }
+  }
+
   function exportSchema() {
+    const processScheduling: ProcessSchedulingModule = {
+      scheduling: {
+        completedStepIds: [...schedulingState.value.completedStepIds],
+        currentStepId: schedulingState.value.currentStepId,
+        filterColorId: schedulingState.value.filterColorId,
+        repeatCount: schedulingState.value.repeatCount
+      },
+      notes: [...processNotes.value]
+    }
+
     const schema: PatternSchema = {
       version: SCHEMA_VERSION,
       name: schemaName.value,
@@ -449,7 +602,8 @@ export const usePatternStore = defineStore('pattern', () => {
       layers: layers.value.map(l => cloneLayer(l)),
       activeLayerId: activeLayerId.value,
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      processScheduling
     }
 
     const filename = `${schemaName.value || '纹样方案'}-${Date.now()}.json`
@@ -486,6 +640,28 @@ export const usePatternStore = defineStore('pattern', () => {
 
     grid.value = composedGrid.value
 
+    if (schema.processScheduling) {
+      const ps = schema.processScheduling
+      schedulingState.value = {
+        completedStepIds: Array.isArray(ps.scheduling?.completedStepIds)
+          ? [...ps.scheduling.completedStepIds]
+          : [],
+        currentStepId: typeof ps.scheduling?.currentStepId === 'string'
+          ? ps.scheduling.currentStepId
+          : null,
+        filterColorId: typeof ps.scheduling?.filterColorId === 'string'
+          ? ps.scheduling.filterColorId
+          : null,
+        repeatCount: typeof ps.scheduling?.repeatCount === 'number'
+          ? Math.max(1, Math.min(100, ps.scheduling.repeatCount))
+          : 6
+      }
+      processNotes.value = Array.isArray(ps.notes) ? [...ps.notes] : []
+    } else {
+      schedulingState.value = defaultSchedulingState()
+      processNotes.value = []
+    }
+
     resumeHistory()
     initHistory()
 
@@ -505,6 +681,8 @@ export const usePatternStore = defineStore('pattern', () => {
     schemaName.value = '未命名纹样'
     previewRepeat.value = 6
     clipboard.value = null
+    schedulingState.value = defaultSchedulingState()
+    processNotes.value = []
     resumeHistory()
     initHistory()
   }
@@ -529,6 +707,11 @@ export const usePatternStore = defineStore('pattern', () => {
     layerConsumptions,
     totalCells,
     filledCells,
+    processSheet,
+    schedulingSteps,
+    schedulingData,
+    schedulingState,
+    processNotes,
     canUndo,
     canRedo,
     clipboard,
@@ -560,6 +743,20 @@ export const usePatternStore = defineStore('pattern', () => {
     copySelection,
     pasteSelection,
     hasClipboardData,
+    setSchedulingRepeatCount,
+    setSchedulingFilterColor,
+    setCurrentSchedulingStep,
+    toggleStepCompleted,
+    markStepCompleted,
+    markStepIncomplete,
+    goToNextStep,
+    goToPrevStep,
+    resetSchedulingProgress,
+    exportSchedulingJson,
+    setProcessNotes,
+    addProcessNote,
+    removeProcessNote,
+    updateProcessNote,
     saveHistory,
     pauseHistory,
     resumeHistory,
