@@ -3,12 +3,18 @@ import { computed, ref, watch, nextTick } from 'vue'
 import { usePatternStore } from '@/stores/pattern'
 import { storeToRefs } from 'pinia'
 import { useMessage } from 'naive-ui'
+import html2canvas from 'html2canvas'
+import jsPDF from 'jspdf'
 
 const store = usePatternStore()
 const message = useMessage()
 const { schedulingData, colors, processSheet, schedulingState } = storeToRefs(store)
 
 const stepsContainerRef = ref<HTMLDivElement | null>(null)
+const repeatInputRef = ref<HTMLInputElement | null>(null)
+const repeatInputValue = ref<string>('')
+const printSchedulingRef = ref<HTMLDivElement | null>(null)
+const isExportingPdf = ref(false)
 
 const usedColors = computed(() => {
   return processSheet.value.usedColors
@@ -26,10 +32,16 @@ const progressPercentage = computed(() => {
   return total > 0 ? (completed / total) * 100 : 0
 })
 
-const repeatCount = computed({
-  get: () => schedulingState.value.repeatCount,
-  set: (val: number) => store.setSchedulingRepeatCount(val)
-})
+const repeatCount = computed(() => schedulingState.value.repeatCount)
+
+watch(() => schedulingState.value.repeatCount, (newVal) => {
+  repeatInputValue.value = String(newVal)
+}, { immediate: true })
+
+function handleRepeatInput(e: Event) {
+  const target = e.target as HTMLInputElement
+  repeatInputValue.value = target.value
+}
 
 function handleFilterColor(colorId: string | null) {
   store.setSchedulingFilterColor(colorId)
@@ -64,14 +76,214 @@ function handleExportJson() {
   message.success('排线方案已导出')
 }
 
+function handleExportPdf() {
+  if (!printSchedulingRef.value) return
+  
+  isExportingPdf.value = true
+  const loadingMsg = message.loading('正在生成 PDF...', { duration: 0 })
+  
+  html2canvas(printSchedulingRef.value, {
+    scale: 2,
+    useCORS: true,
+    backgroundColor: '#ffffff',
+  }).then(canvas => {
+    const imgData = canvas.toDataURL('image/png')
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    })
+    
+    const pdfWidth = pdf.internal.pageSize.getWidth()
+    const pdfHeight = pdf.internal.pageSize.getHeight()
+    const imgWidth = canvas.width
+    const imgHeight = canvas.height
+    
+    const pageHeight = pdfHeight
+    const imgRatio = imgWidth / imgHeight
+    const pageImgWidth = pdfWidth - 20
+    const pageImgHeight = pageImgWidth / imgRatio
+    
+    let heightLeft = imgHeight
+    let position = 10
+    
+    pdf.addImage(imgData, 'PNG', 10, position, pageImgWidth, pageImgHeight)
+    heightLeft -= pageHeight
+    
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight
+      pdf.addPage()
+      pdf.addImage(imgData, 'PNG', 10, position, pageImgWidth, pageImgHeight)
+      heightLeft -= pageHeight
+    }
+    
+    const filename = `生产排线-${processSheet.value.name}-${Date.now()}.pdf`
+    pdf.save(filename)
+    
+    loadingMsg.destroy()
+    message.success('PDF 已导出')
+    isExportingPdf.value = false
+  }).catch(error => {
+    console.error('PDF export error:', error)
+    loadingMsg.destroy()
+    message.error('PDF 导出失败，请重试')
+    isExportingPdf.value = false
+  })
+}
+
 function handlePrint() {
-  window.print()
+  if (!printSchedulingRef.value) return
+  
+  const printContent = printSchedulingRef.value.innerHTML
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) {
+    message.error('无法打开打印窗口，请检查浏览器弹窗设置')
+    return
+  }
+  
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>生产排线 - ${processSheet.value.name}</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+          color: #333;
+          padding: 20px;
+          background: #fff;
+        }
+        .print-scheduling { max-width: 800px; margin: 0 auto; }
+        .print-header { text-align: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #c84b31; }
+        .print-title { font-size: 24px; font-weight: 700; color: #c84b31; margin-bottom: 5px; }
+        .print-subtitle { font-size: 13px; color: #888; }
+        .print-info {
+          display: flex;
+          justify-content: space-between;
+          margin-bottom: 20px;
+          padding: 12px 16px;
+          background: #f9f5f0;
+          border-radius: 6px;
+        }
+        .print-info-item { display: flex; flex-direction: column; gap: 4px; }
+        .print-info-label { font-size: 12px; color: #888; }
+        .print-info-value { font-size: 15px; font-weight: 600; color: #333; }
+        .print-progress {
+          margin-bottom: 20px;
+          .progress-label { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; color: #555; }
+          .progress-bar {
+            height: 8px;
+            background: #e8e0d5;
+            border-radius: 4px;
+            overflow: hidden;
+          }
+          .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #c84b31, #d65842);
+          }
+        }
+        .print-steps-title { font-size: 15px; font-weight: 600; color: #333; margin-bottom: 12px; padding-left: 8px; border-left: 4px solid #c84b31; }
+        .print-steps-list { display: flex; flex-direction: column; gap: 8px; }
+        .print-step {
+          display: flex;
+          gap: 10px;
+          padding: 10px 12px;
+          background: #f9f5f0;
+          border-radius: 6px;
+          border-left: 3px solid #ddd;
+          page-break-inside: avoid;
+          &.completed { opacity: 0.6; border-left-color: #52c41a; }
+          &.current { background: #fff5f2; border-left-color: #c84b31; }
+        }
+        .step-index {
+          width: 26px;
+          height: 26px;
+          background: #c84b31;
+          color: #fff;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          font-weight: 600;
+          flex-shrink: 0;
+        }
+        .step-color-dot {
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          flex-shrink: 0;
+          margin-top: 6px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        }
+        .step-content { flex: 1; min-width: 0; }
+        .step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
+        .step-color-name { font-size: 13px; font-weight: 600; color: #333; }
+        .step-tag { font-size: 11px; color: #888; background: #e8e0d5; padding: 2px 6px; border-radius: 3px; }
+        .step-desc { font-size: 12px; color: #666; margin-bottom: 4px; }
+        .step-positions { display: flex; flex-wrap: wrap; gap: 3px; }
+        .pos-tag {
+          padding: 2px 6px;
+          background: #fff;
+          border: 1px solid #e8e0d5;
+          border-radius: 3px;
+          font-size: 11px;
+          font-weight: 600;
+          color: #8b7355;
+        }
+        .step-check {
+          width: 18px;
+          height: 18px;
+          border: 2px solid #d4c8b8;
+          border-radius: 4px;
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          color: #fff;
+          &.checked {
+            background: #52c41a;
+            border-color: #52c41a;
+          }
+        }
+        .print-footer {
+          margin-top: 30px;
+          padding-top: 15px;
+          border-top: 1px solid #ddd;
+          text-align: center;
+          font-size: 11px;
+          color: #999;
+        }
+        @media print {
+          body { padding: 10px; }
+          .print-step { page-break-inside: avoid; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="print-scheduling">${printContent}</div>
+    </body>
+    </html>
+  `)
+  
+  printWindow.document.close()
+  printWindow.focus()
+  
+  setTimeout(() => {
+    printWindow.print()
+  }, 200)
+  
   message.success('正在准备打印...')
 }
 
 function handleRepeatChange(val: number) {
   if (!Number.isInteger(val) || val < 1 || val > 100) {
     message.error('重复次数必须是 1-100 之间的整数')
+    nextTick(() => {
+      repeatInputValue.value = String(schedulingState.value.repeatCount)
+    })
     return
   }
   store.setSchedulingRepeatCount(val)
@@ -106,7 +318,11 @@ watch(() => schedulingData.value.currentStepIndex, () => {
         </button>
         <button class="action-btn" @click="handleExportJson" title="导出 JSON">
           <span class="btn-icon">↧</span>
-          导出
+          JSON
+        </button>
+        <button class="action-btn" @click="handleExportPdf" :disabled="isExportingPdf" title="导出 PDF">
+          <span class="btn-icon">📄</span>
+          PDF
         </button>
         <button class="action-btn primary" @click="handlePrint" title="打印">
           <span class="btn-icon">⎙</span>
@@ -143,13 +359,14 @@ watch(() => schedulingData.value.currentStepIndex, () => {
             −
           </button>
           <input
-            type="number"
+            ref="repeatInputRef"
+            type="text"
             class="repeat-input"
-            :value="repeatCount"
-            min="1"
-            max="100"
+            :value="repeatInputValue"
+            @input="handleRepeatInput"
             @change="e => handleRepeatChange(Number((e.target as HTMLInputElement).value))"
             @blur="e => handleRepeatChange(Number((e.target as HTMLInputElement).value))"
+            @keyup.enter="e => handleRepeatChange(Number((e.target as HTMLInputElement).value))"
           />
           <button
             class="repeat-btn"
@@ -276,6 +493,83 @@ watch(() => schedulingData.value.currentStepIndex, () => {
         <p>暂无排程步骤</p>
         <p class="hint">请先在纹样编辑器中设计图案</p>
       </div>
+    </div>
+  </div>
+
+  <div ref="printSchedulingRef" class="print-scheduling">
+    <div class="print-header">
+      <h1 class="print-title">生产排线清单</h1>
+      <p class="print-subtitle">Production Scheduling Sheet · {{ processSheet.name }}</p>
+    </div>
+
+    <div class="print-info">
+      <div class="print-info-item">
+        <span class="print-info-label">纹样方案</span>
+        <span class="print-info-value">{{ processSheet.name }}</span>
+      </div>
+      <div class="print-info-item">
+        <span class="print-info-label">重复次数</span>
+        <span class="print-info-value">{{ schedulingState.repeatCount }} 次</span>
+      </div>
+      <div class="print-info-item">
+        <span class="print-info-label">总步骤数</span>
+        <span class="print-info-value">{{ schedulingData.totalCount }} 步</span>
+      </div>
+      <div class="print-info-item">
+        <span class="print-info-label">已完成</span>
+        <span class="print-info-value">{{ schedulingData.completedCount }} 步</span>
+      </div>
+    </div>
+
+    <div class="print-progress">
+      <div class="progress-label">
+        <span>完成进度</span>
+        <span>{{ schedulingData.completedCount }} / {{ schedulingData.totalCount }} ({{ progressPercentage.toFixed(1) }}%)</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: progressPercentage + '%' }"></div>
+      </div>
+    </div>
+
+    <div class="print-steps-title">工序步骤</div>
+    <div class="print-steps-list">
+      <div
+        v-for="step in schedulingData.steps"
+        :key="step.id"
+        class="print-step"
+        :class="{
+          completed: step.completed,
+          current: schedulingData.steps[schedulingData.currentStepIndex]?.id === step.id
+        }"
+      >
+        <div class="step-check" :class="{ checked: step.completed }">
+          <span v-if="step.completed">✓</span>
+        </div>
+        <div class="step-index">{{ step.stepIndex + 1 }}</div>
+        <div class="step-color-dot" :style="{ backgroundColor: step.colorValue }"></div>
+        <div class="step-content">
+          <div class="step-header">
+            <span class="step-color-name">{{ step.colorName }}</span>
+            <span class="step-tag">第 {{ step.beatIndex + 1 }} 排</span>
+            <span class="step-tag">第 {{ step.repeatIndex + 1 }} 轮</span>
+          </div>
+          <div class="step-desc">{{ step.description }}</div>
+          <div class="step-positions">
+            <span
+              v-for="pos in step.warpPositions"
+              :key="pos"
+              class="pos-tag"
+            >
+              {{ pos }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="print-footer">
+      <p>生成时间：{{ new Date().toLocaleString('zh-CN') }}</p>
+      <p>织带纹样设计器 · 生产排线自动生成</p>
     </div>
   </div>
 </template>
@@ -777,6 +1071,226 @@ watch(() => schedulingData.value.currentStepIndex, () => {
         color: #a08b72;
         margin-top: 8px;
       }
+    }
+  }
+}
+
+.print-scheduling {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 800px;
+  background: #fff;
+  padding: 25px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  color: #333;
+  z-index: -1;
+
+  .print-header {
+    text-align: center;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #c84b31;
+
+    .print-title {
+      font-size: 24px;
+      font-weight: 700;
+      color: #c84b31;
+      margin: 0 0 5px 0;
+    }
+
+    .print-subtitle {
+      font-size: 13px;
+      color: #888;
+      margin: 0;
+    }
+  }
+
+  .print-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    background: #f9f5f0;
+    border-radius: 6px;
+
+    .print-info-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .print-info-label {
+      font-size: 12px;
+      color: #888;
+    }
+
+    .print-info-value {
+      font-size: 15px;
+      font-weight: 600;
+      color: #333;
+    }
+  }
+
+  .print-progress {
+    margin-bottom: 20px;
+
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #555;
+    }
+
+    .progress-bar {
+      height: 8px;
+      background: #e8e0d5;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #c84b31, #d65842);
+    }
+  }
+
+  .print-steps-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 12px;
+    padding-left: 8px;
+    border-left: 4px solid #c84b31;
+  }
+
+  .print-steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .print-step {
+    display: flex;
+    gap: 10px;
+    padding: 10px 12px;
+    background: #f9f5f0;
+    border-radius: 6px;
+    border-left: 3px solid #ddd;
+
+    &.completed {
+      opacity: 0.7;
+      border-left-color: #52c41a;
+    }
+
+    &.current {
+      background: #fff5f2;
+      border-left-color: #c84b31;
+    }
+
+    .step-check {
+      width: 20px;
+      height: 20px;
+      border: 2px solid #d4c8b8;
+      border-radius: 4px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: #fff;
+      margin-top: 2px;
+
+      &.checked {
+        background: #52c41a;
+        border-color: #52c41a;
+      }
+    }
+
+    .step-index {
+      width: 26px;
+      height: 26px;
+      background: #c84b31;
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .step-color-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 6px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    }
+
+    .step-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+      flex-wrap: wrap;
+    }
+
+    .step-color-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+    }
+
+    .step-tag {
+      font-size: 11px;
+      color: #888;
+      background: #e8e0d5;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    .step-desc {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+
+    .step-positions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+    }
+
+    .pos-tag {
+      padding: 2px 6px;
+      background: #fff;
+      border: 1px solid #e8e0d5;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #8b7355;
+    }
+  }
+
+  .print-footer {
+    margin-top: 30px;
+    padding-top: 15px;
+    border-top: 1px solid #ddd;
+    text-align: center;
+    font-size: 11px;
+    color: #999;
+
+    p {
+      margin: 4px 0;
     }
   }
 }

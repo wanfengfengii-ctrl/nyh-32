@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, nextTick } from 'vue'
 import { usePatternStore } from '@/stores/pattern'
 import { storeToRefs } from 'pinia'
 import { useMessage } from 'naive-ui'
 import { downloadJsonFile } from '@/utils/pattern'
+import html2canvas from 'html2canvas'
+import jsPDF from 'jspdf'
 
 const store = usePatternStore()
 const message = useMessage()
@@ -11,6 +13,8 @@ const { processSheet, processNotes } = storeToRefs(store)
 
 const viewMode = ref<'basic' | 'layers' | 'consumption'>('basic')
 const newNote = ref('')
+const printSheetRef = ref<HTMLDivElement | null>(null)
+const isExportingPdf = ref(false)
 
 const allNotes = computed(() => {
   const baseNotes = processSheet.value.operationNotes
@@ -19,8 +23,191 @@ const allNotes = computed(() => {
 })
 
 function handlePrint() {
-  window.print()
+  if (!printSheetRef.value) return
+  
+  const printContent = printSheetRef.value.innerHTML
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) {
+    message.error('无法打开打印窗口，请检查浏览器弹窗设置')
+    return
+  }
+  
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>工艺单 - ${processSheet.value.name}</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+          color: #333;
+          padding: 30px;
+          background: #fff;
+        }
+        .print-sheet { max-width: 800px; margin: 0 auto; }
+        .print-header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #c84b31; }
+        .print-title { font-size: 28px; font-weight: 700; color: #c84b31; margin-bottom: 8px; }
+        .print-subtitle { font-size: 14px; color: #888; letter-spacing: 2px; }
+        .print-section { margin-bottom: 24px; }
+        .print-section-title { font-size: 16px; font-weight: 600; color: #333; margin-bottom: 12px; padding-left: 10px; border-left: 4px solid #c84b31; }
+        .print-subsection-title { font-size: 14px; font-weight: 600; color: #555; margin: 16px 0 8px; }
+        .print-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+        .print-table th, .print-table td {
+          border: 1px solid #ddd;
+          padding: 10px 12px;
+          text-align: left;
+          font-size: 13px;
+        }
+        .print-table th { background: #f9f5f0; font-weight: 600; color: #666; width: 25%; }
+        .print-table.full th { width: auto; }
+        .print-table.full { width: 100%; }
+        .print-summary { font-size: 13px; color: #666; margin-bottom: 10px; }
+        .print-empty { font-size: 13px; color: #999; padding: 20px; text-align: center; }
+        .print-color-list { display: flex; flex-wrap: wrap; gap: 10px; }
+        .print-color-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 14px;
+          background: #f9f5f0;
+          border-radius: 6px;
+        }
+        .print-color-no {
+          width: 22px;
+          height: 22px;
+          background: #c84b31;
+          color: #fff;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        .print-color-dot {
+          width: 16px;
+          height: 16px;
+          border-radius: 4px;
+          border: 2px solid #fff;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+          display: inline-block;
+          vertical-align: middle;
+        }
+        .print-color-name { font-size: 13px; font-weight: 500; color: #333; }
+        .print-color-hex { font-size: 11px; color: #999; font-family: monospace; }
+        .print-layer-consumption { display: flex; flex-direction: column; gap: 10px; }
+        .print-layer-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 10px 14px;
+          background: #f9f5f0;
+          border-radius: 6px;
+        }
+        .print-layer-name { font-size: 13px; font-weight: 600; color: #333; }
+        .print-layer-stats { display: flex; gap: 8px; }
+        .print-stat-chip {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 2px 8px;
+          background: #fff;
+          border-radius: 4px;
+          font-size: 12px;
+          font-weight: 600;
+          color: #555;
+        }
+        .print-stat-dot { width: 8px; height: 8px; border-radius: 2px; }
+        .print-suggestion {
+          display: flex;
+          align-items: baseline;
+          gap: 10px;
+          padding: 16px 20px;
+          background: linear-gradient(135deg, #fff5f2 0%, #faf7f2 100%);
+          border-radius: 8px;
+          border: 1px solid #f5c1b3;
+          margin-bottom: 8px;
+        }
+        .print-suggestion-value { font-size: 32px; font-weight: 700; color: #c84b31; line-height: 1; }
+        .print-suggestion-label { font-size: 14px; color: #8b5a4a; font-weight: 500; }
+        .print-suggestion-hint { font-size: 12px; color: #8b7355; padding-left: 4px; }
+        .print-notes { padding-left: 20px; margin: 0; }
+        .print-note { font-size: 13px; color: #555; line-height: 1.8; }
+        .print-footer {
+          margin-top: 40px;
+          padding-top: 20px;
+          border-top: 1px solid #ddd;
+          text-align: center;
+          font-size: 12px;
+          color: #999;
+        }
+        .print-footer p { margin: 4px 0; }
+        @media print {
+          body { padding: 15px; }
+          .print-section { page-break-inside: avoid; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="print-sheet">${printContent}</div>
+    </body>
+    </html>
+  `)
+  
+  printWindow.document.close()
+  printWindow.focus()
+  
+  setTimeout(() => {
+    printWindow.print()
+  }, 200)
+  
   message.success('正在准备打印...')
+}
+
+async function handleExportPdf() {
+  if (!printSheetRef.value) return
+  
+  isExportingPdf.value = true
+  const loadingMsg = message.loading('正在生成 PDF...', { duration: 0 })
+  
+  try {
+    const canvas = await html2canvas(printSheetRef.value, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+    })
+    
+    const imgData = canvas.toDataURL('image/png')
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    })
+    
+    const pdfWidth = pdf.internal.pageSize.getWidth()
+    const pdfHeight = pdf.internal.pageSize.getHeight()
+    const imgWidth = canvas.width
+    const imgHeight = canvas.height
+    
+    const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight)
+    const imgX = (pdfWidth - imgWidth * ratio) / 2
+    const imgY = 10
+    
+    pdf.addImage(imgData, 'PNG', imgX, imgY, imgWidth * ratio, imgHeight * ratio)
+    
+    const filename = `工艺单-${processSheet.value.name}-${Date.now()}.pdf`
+    pdf.save(filename)
+    
+    loadingMsg.destroy()
+    message.success('PDF 已导出')
+  } catch (error) {
+    console.error('PDF export error:', error)
+    loadingMsg.destroy()
+    message.error('PDF 导出失败，请重试')
+  } finally {
+    isExportingPdf.value = false
+  }
 }
 
 function handleExportJson() {
@@ -61,7 +248,11 @@ function switchView(mode: 'basic' | 'layers' | 'consumption') {
       <div class="header-actions">
         <button class="action-btn" @click="handleExportJson" title="导出 JSON">
           <span class="btn-icon">↧</span>
-          导出
+          JSON
+        </button>
+        <button class="action-btn" @click="handleExportPdf" :disabled="isExportingPdf" title="导出 PDF">
+          <span class="btn-icon">📄</span>
+          PDF
         </button>
         <button class="action-btn primary" @click="handlePrint" title="打印">
           <span class="btn-icon">⎙</span>
@@ -273,6 +464,151 @@ function switchView(mode: 'basic' | 'layers' | 'consumption') {
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div ref="printSheetRef" class="print-sheet">
+    <div class="print-header">
+      <h1 class="print-title">织带纹样工艺单</h1>
+      <p class="print-subtitle">Weaving Pattern Process Sheet</p>
+    </div>
+
+    <div class="print-section">
+      <h2 class="print-section-title">一、基本信息</h2>
+      <table class="print-table">
+        <tr>
+          <th>方案名称</th>
+          <td>{{ processSheet.name }}</td>
+          <th>经线数量</th>
+          <td>{{ processSheet.warpCount }} 根</td>
+        </tr>
+        <tr>
+          <th>纬线循环</th>
+          <td>{{ processSheet.weftCycle }} 行</td>
+          <th>总格数</th>
+          <td>{{ processSheet.totalCells }} 格</td>
+        </tr>
+        <tr>
+          <th>已填充</th>
+          <td>{{ processSheet.filledCells }} 格</td>
+          <th>填充率</th>
+          <td>{{ (processSheet.fillRate * 100).toFixed(1) }}%</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="print-section">
+      <h2 class="print-section-title">二、颜色清单</h2>
+      <div v-if="processSheet.usedColors.length > 0" class="print-color-list">
+        <div
+          v-for="(color, index) in processSheet.usedColors"
+          :key="color.id"
+          class="print-color-item"
+        >
+          <span class="print-color-no">{{ index + 1 }}</span>
+          <div class="print-color-dot" :style="{ backgroundColor: color.value }"></div>
+          <span class="print-color-name">{{ color.name }}</span>
+          <span class="print-color-hex">{{ color.value.toUpperCase() }}</span>
+        </div>
+      </div>
+      <p v-else class="print-empty">暂无使用的颜色</p>
+    </div>
+
+    <div class="print-section">
+      <h2 class="print-section-title">三、图层说明</h2>
+      <p class="print-summary">共 {{ processSheet.layers.length }} 个图层</p>
+      <table class="print-table full">
+        <thead>
+          <tr>
+            <th>序号</th>
+            <th>图层名称</th>
+            <th>说明</th>
+            <th>格数</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(layer, index) in processSheet.layers" :key="layer.layerId">
+            <td>{{ index + 1 }}</td>
+            <td>{{ layer.layerName }}</td>
+            <td>{{ layer.description }}</td>
+            <td>{{ layer.cellCount }} 格</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="print-section">
+      <h2 class="print-section-title">四、消耗统计</h2>
+      
+      <h3 class="print-subsection-title">总消耗统计</h3>
+      <div v-if="processSheet.totalConsumption.filter(c => c.count > 0).length > 0">
+        <table class="print-table full">
+          <thead>
+            <tr>
+              <th>颜色</th>
+              <th>使用次数</th>
+              <th>占比</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in processSheet.totalConsumption.filter(c => c.count > 0)" :key="item.colorId">
+              <td>
+                <span class="print-color-dot" :style="{ backgroundColor: item.colorValue }"></span>
+                {{ item.colorName }}
+              </td>
+              <td>{{ item.count }} 次</td>
+              <td>{{ (item.percentage * 100).toFixed(1) }}%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else class="print-empty">暂无消耗数据</p>
+
+      <h3 class="print-subsection-title">单图层消耗</h3>
+      <div class="print-layer-consumption">
+        <div
+          v-for="layer in processSheet.layerConsumptions"
+          :key="layer.layerId"
+          class="print-layer-item"
+        >
+          <span class="print-layer-name">{{ layer.layerName }}</span>
+          <div class="print-layer-stats">
+            <span
+              v-for="stat in layer.stats.filter(s => s.count > 0)"
+              :key="stat.colorId"
+              class="print-stat-chip"
+            >
+              <span class="print-stat-dot" :style="{ backgroundColor: stat.colorValue }"></span>
+              {{ stat.count }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="print-section">
+      <h2 class="print-section-title">五、重复次数建议</h2>
+      <div class="print-suggestion">
+        <span class="print-suggestion-value">{{ processSheet.suggestedRepeats }}</span>
+        <span class="print-suggestion-label">次循环</span>
+      </div>
+      <p class="print-suggestion-hint">
+        建议重复 {{ processSheet.suggestedRepeats }} 次，总长约 {{ processSheet.totalWeftBeats }} 排纬线
+      </p>
+    </div>
+
+    <div class="print-section">
+      <h2 class="print-section-title">六、操作备注</h2>
+      <ol class="print-notes">
+        <li v-for="(note, index) in allNotes" :key="index" class="print-note">
+          {{ note }}
+        </li>
+      </ol>
+    </div>
+
+    <div class="print-footer">
+      <p>生成时间：{{ new Date().toLocaleString('zh-CN') }}</p>
+      <p>织带纹样设计器 · 工艺单自动生成</p>
     </div>
   </div>
 </template>
@@ -811,6 +1147,242 @@ function switchView(mode: 'basic' | 'layers' | 'consumption') {
           color: #6b5b47;
         }
       }
+    }
+  }
+}
+
+.print-sheet {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 800px;
+  background: #fff;
+  padding: 30px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  color: #333;
+  z-index: -1;
+
+  .print-header {
+    text-align: center;
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 2px solid #c84b31;
+
+    .print-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: #c84b31;
+      margin: 0 0 8px 0;
+    }
+
+    .print-subtitle {
+      font-size: 14px;
+      color: #888;
+      letter-spacing: 2px;
+      margin: 0;
+    }
+  }
+
+  .print-section {
+    margin-bottom: 24px;
+
+    .print-section-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #333;
+      margin: 0 0 12px 0;
+      padding-left: 10px;
+      border-left: 4px solid #c84b31;
+    }
+
+    .print-subsection-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #555;
+      margin: 16px 0 8px 0;
+    }
+  }
+
+  .print-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 10px;
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px 12px;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    th {
+      background: #f9f5f0;
+      font-weight: 600;
+      color: #666;
+      width: 25%;
+    }
+
+    &.full th {
+      width: auto;
+    }
+  }
+
+  .print-summary {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 10px;
+  }
+
+  .print-empty {
+    font-size: 13px;
+    color: #999;
+    padding: 20px;
+    text-align: center;
+  }
+
+  .print-color-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .print-color-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: #f9f5f0;
+    border-radius: 6px;
+
+    .print-color-no {
+      width: 22px;
+      height: 22px;
+      background: #c84b31;
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .print-color-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    }
+
+    .print-color-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: #333;
+    }
+
+    .print-color-hex {
+      font-size: 11px;
+      color: #999;
+      font-family: monospace;
+    }
+  }
+
+  .print-layer-consumption {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .print-layer-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: #f9f5f0;
+    border-radius: 6px;
+
+    .print-layer-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+    }
+
+    .print-layer-stats {
+      display: flex;
+      gap: 8px;
+    }
+
+    .print-stat-chip {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      background: #fff;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+
+      .print-stat-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+      }
+    }
+  }
+
+  .print-suggestion {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 16px 20px;
+    background: linear-gradient(135deg, #fff5f2 0%, #faf7f2 100%);
+    border-radius: 8px;
+    border: 1px solid #f5c1b3;
+    margin-bottom: 8px;
+
+    .print-suggestion-value {
+      font-size: 32px;
+      font-weight: 700;
+      color: #c84b31;
+      line-height: 1;
+    }
+
+    .print-suggestion-label {
+      font-size: 14px;
+      color: #8b5a4a;
+      font-weight: 500;
+    }
+  }
+
+  .print-suggestion-hint {
+    font-size: 12px;
+    color: #8b7355;
+    padding-left: 4px;
+  }
+
+  .print-notes {
+    padding-left: 20px;
+    margin: 0;
+
+    .print-note {
+      font-size: 13px;
+      color: #555;
+      line-height: 1.8;
+    }
+  }
+
+  .print-footer {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid #ddd;
+    text-align: center;
+    font-size: 12px;
+    color: #999;
+
+    p {
+      margin: 4px 0;
     }
   }
 }
