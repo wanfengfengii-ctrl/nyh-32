@@ -6,6 +6,7 @@ import SettingsPanel from '@/components/SettingsPanel.vue'
 import BeatGridEditor from '@/components/BeatGridEditor.vue'
 import PatternPreview from '@/components/PatternPreview.vue'
 import ConsumptionChart from '@/components/ConsumptionChart.vue'
+import LayerPanel from '@/components/LayerPanel.vue'
 
 const theme = computed(() => undefined)
 </script>
@@ -19,6 +20,7 @@ const theme = computed(() => undefined)
         <main class="main-content">
           <div class="content-wrapper">
             <aside class="left-panel">
+              <LayerPanel />
               <SettingsPanel />
             </aside>
 
@@ -52,7 +54,7 @@ const theme = computed(() => undefined)
 .main-content {
   flex: 1;
   padding: 24px;
-  max-width: 1600px;
+  max-width: 1800px;
   width: 100%;
   margin: 0 auto;
   box-sizing: border-box;
@@ -60,7 +62,7 @@ const theme = computed(() => undefined)
 
 .content-wrapper {
   display: grid;
-  grid-template-columns: 260px 1fr 320px;
+  grid-template-columns: 280px 1fr 340px;
   gap: 20px;
   align-items: start;
 }
@@ -68,6 +70,9 @@ const theme = computed(() => undefined)
 .left-panel {
   position: sticky;
   top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .center-panel {
@@ -92,6 +97,13 @@ const theme = computed(() => undefined)
 
   p {
     margin: 0;
+  }
+}
+
+@media (max-width: 1440px) {
+  .content-wrapper {
+    grid-template-columns: 260px 1fr 320px;
+    gap: 16px;
   }
 }
 

@@ -1,4 +1,4 @@
-import type { PatternSchema, ValidationResult, ColorItem, BeatGrid } from '@/types'
+import type { PatternSchema, ValidationResult, ColorItem, BeatGrid, LayerItem } from '@/types'
 
 const HEX_COLOR_REGEX = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/
 
@@ -8,6 +8,10 @@ export function validateHexColor(value: string): boolean {
 
 export function validatePositiveInteger(value: number): boolean {
   return Number.isInteger(value) && value > 0
+}
+
+export function validateOpacity(value: number): boolean {
+  return Number.isInteger(value) && value >= 0 && value <= 100
 }
 
 export function validateColors(colors: ColorItem[]): string[] {
@@ -81,6 +85,68 @@ export function validateGrid(
   return errors
 }
 
+export function validateLayers(
+  layers: LayerItem[],
+  warpCount: number,
+  weftCycle: number,
+  colors: ColorItem[]
+): string[] {
+  const errors: string[] = []
+
+  if (!Array.isArray(layers) || layers.length === 0) {
+    errors.push('图层数据无效，至少需要一个图层')
+    return errors
+  }
+
+  const idSet = new Set<string>()
+  const orderSet = new Set<number>()
+
+  layers.forEach((layer, index) => {
+    const prefix = `第 ${index + 1} 个图层`
+
+    if (!layer.id || typeof layer.id !== 'string') {
+      errors.push(`${prefix}缺少有效的 id`)
+    } else if (idSet.has(layer.id)) {
+      errors.push(`存在重复的图层编号: ${layer.id}`)
+    } else {
+      idSet.add(layer.id)
+    }
+
+    if (!layer.name || typeof layer.name !== 'string') {
+      errors.push(`${prefix}缺少名称`)
+    }
+
+    if (typeof layer.visible !== 'boolean') {
+      errors.push(`${prefix}的 visible 字段无效`)
+    }
+
+    if (typeof layer.locked !== 'boolean') {
+      errors.push(`${prefix}的 locked 字段无效`)
+    }
+
+    if (!validateOpacity(layer.opacity)) {
+      errors.push(`${prefix}的透明度无效，必须在 0-100 之间`)
+    }
+
+    if (typeof layer.order !== 'number' || !Number.isInteger(layer.order)) {
+      errors.push(`${prefix}的顺序字段无效`)
+    } else if (orderSet.has(layer.order)) {
+      errors.push(`存在重复的图层顺序值: ${layer.order}`)
+    } else {
+      orderSet.add(layer.order)
+    }
+
+    if (!layer.grid) {
+      errors.push(`${prefix}缺少网格数据`)
+    } else {
+      const gridErrors = validateGrid(layer.grid, warpCount, weftCycle, colors)
+      gridErrors.forEach(err => errors.push(`${prefix} - ${err}`))
+    }
+  })
+
+  return errors
+}
+
 export function validatePatternSchema(schema: unknown): ValidationResult {
   const errors: string[] = []
 
@@ -116,6 +182,18 @@ export function validatePatternSchema(schema: unknown): ValidationResult {
     const grid = data.grid as BeatGrid
     const gridErrors = validateGrid(grid, warpCount as number, weftCycle as number, colors)
     errors.push(...gridErrors)
+  }
+
+  if (data.layers !== undefined) {
+    if (errors.length === 0) {
+      const layers = data.layers as LayerItem[]
+      const layerErrors = validateLayers(layers, warpCount as number, weftCycle as number, colors)
+      errors.push(...layerErrors)
+    }
+
+    if (data.activeLayerId === undefined || typeof data.activeLayerId !== 'string') {
+      errors.push('缺少有效的当前图层 ID')
+    }
   }
 
   return { valid: errors.length === 0, errors }

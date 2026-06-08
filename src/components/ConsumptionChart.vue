@@ -24,12 +24,32 @@ echarts.use([
 ])
 
 const store = usePatternStore()
-const { consumptionStats, filledCells, totalCells } = storeToRefs(store)
+const { consumptionStats, filledCells, totalCells, layerConsumptions, layers, activeLayerId } = storeToRefs(store)
 
 const chartType = ref<'pie' | 'bar'>('pie')
+const viewMode = ref<'total' | 'layer'>('total')
+const selectedLayerId = ref<string | null>(null)
+
+watch(activeLayerId, (newId) => {
+  if (viewMode.value === 'layer') {
+    selectedLayerId.value = newId
+  }
+}, { immediate: true })
+
+const currentStats = computed(() => {
+  if (viewMode.value === 'total') {
+    return consumptionStats.value
+  }
+  const layerConsumption = layerConsumptions.value.find(l => l.layerId === selectedLayerId.value)
+  return layerConsumption?.stats || []
+})
+
+const currentFilledCells = computed(() => {
+  return currentStats.value.reduce((sum, item) => sum + item.count, 0)
+})
 
 const pieOption = computed(() => {
-  const data = consumptionStats.value
+  const data = currentStats.value
     .filter(item => item.count > 0)
     .map(item => ({
       name: item.colorName,
@@ -94,7 +114,7 @@ const pieOption = computed(() => {
 })
 
 const barOption = computed(() => {
-  const data = consumptionStats.value.filter(item => item.count > 0)
+  const data = currentStats.value.filter(item => item.count > 0)
 
   return {
     tooltip: {
@@ -180,6 +200,22 @@ const barOption = computed(() => {
 function switchChartType(type: 'pie' | 'bar') {
   chartType.value = type
 }
+
+function switchViewMode(mode: 'total' | 'layer') {
+  viewMode.value = mode
+  if (mode === 'layer') {
+    selectedLayerId.value = activeLayerId.value
+  }
+}
+
+function selectLayer(layerId: string) {
+  selectedLayerId.value = layerId
+}
+
+function getLayerFilledCells(layerId: string): number {
+  const layerConsumption = layerConsumptions.value.find(l => l.layerId === layerId)
+  return layerConsumption?.stats.reduce((sum, item) => sum + item.count, 0) || 0
+}
 </script>
 
 <template>
@@ -204,6 +240,39 @@ function switchChartType(type: 'pie' | 'bar') {
       </div>
     </div>
 
+    <div class="view-mode-switch">
+      <button
+        class="view-btn"
+        :class="{ active: viewMode === 'total' }"
+        @click="switchViewMode('total')"
+      >
+        总消耗
+      </button>
+      <button
+        class="view-btn"
+        :class="{ active: viewMode === 'layer' }"
+        @click="switchViewMode('layer')"
+      >
+        单图层
+      </button>
+    </div>
+
+    <div v-if="viewMode === 'layer'" class="layer-selector">
+      <div class="layer-selector-label">选择图层：</div>
+      <div class="layer-options">
+        <div
+          v-for="layer in layers"
+          :key="layer.id"
+          class="layer-option"
+          :class="{ active: selectedLayerId === layer.id }"
+          @click="selectLayer(layer.id)"
+        >
+          <span class="layer-name">{{ layer.name }}</span>
+          <span class="layer-count">{{ getLayerFilledCells(layer.id) }} 格</span>
+        </div>
+      </div>
+    </div>
+
     <div class="chart-summary">
       <div class="summary-item">
         <span class="summary-label">总格数</span>
@@ -211,11 +280,11 @@ function switchChartType(type: 'pie' | 'bar') {
       </div>
       <div class="summary-item">
         <span class="summary-label">已填充</span>
-        <span class="summary-value filled">{{ filledCells }}</span>
+        <span class="summary-value filled">{{ currentFilledCells }}</span>
       </div>
       <div class="summary-item">
         <span class="summary-label">填充率</span>
-        <span class="summary-value">{{ totalCells > 0 ? ((filledCells / totalCells) * 100).toFixed(1) : 0 }}%</span>
+        <span class="summary-value">{{ totalCells > 0 ? ((currentFilledCells / totalCells) * 100).toFixed(1) : 0 }}%</span>
       </div>
     </div>
 
@@ -236,7 +305,7 @@ function switchChartType(type: 'pie' | 'bar') {
 
     <div class="color-list">
       <div
-        v-for="item in consumptionStats"
+        v-for="item in currentStats"
         :key="item.colorId"
         class="color-item"
       >
@@ -273,7 +342,7 @@ function switchChartType(type: 'pie' | 'bar') {
   box-shadow: 0 2px 12px rgba(61, 44, 30, 0.08);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .chart-header {
@@ -317,10 +386,94 @@ function switchChartType(type: 'pie' | 'bar') {
   }
 }
 
+.view-mode-switch {
+  display: flex;
+  background: #faf7f2;
+  border-radius: 8px;
+  padding: 3px;
+
+  .view-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #8b7355;
+    cursor: pointer;
+    transition: all 0.2s ease;
+
+    &.active {
+      background: #fff;
+      color: #c84b31;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    &:hover:not(.active) {
+      color: #6b5b47;
+    }
+  }
+}
+
+.layer-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  .layer-selector-label {
+    font-size: 12px;
+    color: #8b7355;
+    font-weight: 500;
+  }
+
+  .layer-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .layer-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #faf7f2;
+    border: 1px solid #e8e0d5;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+
+    &:hover {
+      background: #f5f0e6;
+    }
+
+    &.active {
+      background: #fff5f2;
+      border-color: #c84b31;
+
+      .layer-name {
+        color: #c84b31;
+      }
+    }
+
+    .layer-name {
+      font-size: 12px;
+      font-weight: 500;
+      color: #6b5b47;
+    }
+
+    .layer-count {
+      font-size: 11px;
+      color: #a08b72;
+    }
+  }
+}
+
 .chart-summary {
   display: flex;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
   background: #faf7f2;
   border-radius: 8px;
 
@@ -332,12 +485,12 @@ function switchChartType(type: 'pie' | 'bar') {
     gap: 4px;
 
     .summary-label {
-      font-size: 12px;
+      font-size: 11px;
       color: #8b7355;
     }
 
     .summary-value {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
       color: #3d2c1e;
 
@@ -349,7 +502,7 @@ function switchChartType(type: 'pie' | 'bar') {
 }
 
 .chart-container {
-  height: 220px;
+  height: 200px;
   width: 100%;
 }
 
@@ -361,8 +514,8 @@ function switchChartType(type: 'pie' | 'bar') {
 .color-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: 200px;
+  gap: 8px;
+  max-height: 180px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -370,8 +523,8 @@ function switchChartType(type: 'pie' | 'bar') {
 .color-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 5px;
+  padding: 8px 10px;
   background: #faf7f2;
   border-radius: 8px;
   transition: all 0.2s ease;
@@ -386,15 +539,15 @@ function switchChartType(type: 'pie' | 'bar') {
     gap: 8px;
 
     .color-dot {
-      width: 16px;
-      height: 16px;
+      width: 14px;
+      height: 14px;
       border-radius: 4px;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
       flex-shrink: 0;
     }
 
     .color-name {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       color: #3d2c1e;
       flex: 1;
@@ -404,7 +557,7 @@ function switchChartType(type: 'pie' | 'bar') {
   .color-stats {
     display: flex;
     justify-content: space-between;
-    font-size: 12px;
+    font-size: 11px;
 
     .count {
       color: #6b5b47;
@@ -418,7 +571,7 @@ function switchChartType(type: 'pie' | 'bar') {
   }
 
   .progress-bar {
-    height: 4px;
+    height: 3px;
     background: #e8e0d5;
     border-radius: 2px;
     overflow: hidden;

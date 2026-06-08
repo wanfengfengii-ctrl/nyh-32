@@ -5,14 +5,14 @@ import { storeToRefs } from 'pinia'
 import { generatePreviewGrid } from '@/utils/pattern'
 
 const store = usePatternStore()
-const { grid, colors, warpCount, weftCycle, previewRepeat } = storeToRefs(store)
+const { composedGrid, colors, warpCount, weftCycle, previewRepeat, sortedLayers } = storeToRefs(store)
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const containerRef = ref<HTMLDivElement | null>(null)
 const cellSize = ref(10)
 
 const previewGrid = computed(() => {
-  return generatePreviewGrid(grid.value, previewRepeat.value)
+  return generatePreviewGrid(composedGrid.value, previewRepeat.value)
 })
 
 const colorMap = computed(() => {
@@ -22,6 +22,8 @@ const colorMap = computed(() => {
 })
 
 const totalRows = computed(() => weftCycle.value * previewRepeat.value)
+
+const visibleLayerCount = computed(() => sortedLayers.value.filter(l => l.visible).length)
 
 function renderCanvas() {
   const canvas = canvasRef.value
@@ -102,7 +104,7 @@ function handleRepeatChange(value: number) {
 }
 
 watch(
-  [grid, colors, previewRepeat, warpCount, weftCycle],
+  [composedGrid, colors, previewRepeat, warpCount, weftCycle],
   () => {
     nextTick(renderCanvas)
   },
@@ -159,6 +161,11 @@ onMounted(() => {
       <span class="info-item">
         <span class="info-label">纬线：</span>
         <span class="info-value">{{ weftCycle }} × {{ previewRepeat }} = {{ totalRows }} 行</span>
+      </span>
+      <span class="info-divider">|</span>
+      <span class="info-item">
+        <span class="info-label">可见图层：</span>
+        <span class="info-value">{{ visibleLayerCount }}</span>
       </span>
     </div>
 
@@ -274,6 +281,7 @@ onMounted(() => {
   gap: 12px;
   font-size: 13px;
   color: #6b5b47;
+  flex-wrap: wrap;
 
   .info-item {
     .info-label {

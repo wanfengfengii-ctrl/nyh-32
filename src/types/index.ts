@@ -6,6 +6,16 @@ export interface ColorItem {
 
 export type BeatGrid = (string | null)[][]
 
+export interface LayerItem {
+  id: string
+  name: string
+  visible: boolean
+  locked: boolean
+  opacity: number
+  order: number
+  grid: BeatGrid
+}
+
 export interface PatternSchema {
   version: string
   name: string
@@ -13,6 +23,8 @@ export interface PatternSchema {
   weftCycle: number
   colors: ColorItem[]
   grid: BeatGrid
+  layers: LayerItem[]
+  activeLayerId: string
   createdAt: string
   updatedAt: string
 }
@@ -25,12 +37,18 @@ export interface ConsumptionItem {
   percentage: number
 }
 
+export interface LayerConsumption {
+  layerId: string
+  layerName: string
+  stats: ConsumptionItem[]
+}
+
 export interface ValidationResult {
   valid: boolean
   errors: string[]
 }
 
-export const SCHEMA_VERSION = '1.0.0'
+export const SCHEMA_VERSION = '2.0.0'
 
 export const DEFAULT_COLORS: ColorItem[] = [
   { id: 'color-1', name: '米白', value: '#F5F0E6' },
