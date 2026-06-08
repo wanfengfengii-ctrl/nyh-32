@@ -6,15 +6,54 @@ import { useMessage } from 'naive-ui'
 import { downloadJsonFile } from '@/utils/pattern'
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
+import type { AnnotationTarget } from '@/types'
 
 const store = usePatternStore()
 const message = useMessage()
-const { processSheet, processNotes } = storeToRefs(store)
+const { processSheet, processNotes, currentReviewVersion } = storeToRefs(store)
 
 const viewMode = ref<'basic' | 'layers' | 'consumption'>('basic')
 const newNote = ref('')
 const printSheetRef = ref<HTMLDivElement | null>(null)
 const isExportingPdf = ref(false)
+
+const showAnnotationModal = ref(false)
+const annotationTarget = ref<AnnotationTarget | null>(null)
+const newAnnotationContent = ref('')
+
+function openAnnotationModal(target: AnnotationTarget) {
+  if (!currentReviewVersion.value) {
+    message.warning('请先在打样评审中选择一个版本')
+    return
+  }
+  annotationTarget.value = target
+  newAnnotationContent.value = ''
+  showAnnotationModal.value = true
+}
+
+function handleAddAnnotation() {
+  if (!currentReviewVersion.value || !annotationTarget.value) return
+  if (!newAnnotationContent.value.trim()) {
+    message.error('请输入批注内容')
+    return
+  }
+  store.addAnnotation(
+    currentReviewVersion.value.id,
+    annotationTarget.value,
+    newAnnotationContent.value.trim()
+  )
+  message.success('批注已添加')
+  showAnnotationModal.value = false
+}
+
+function getAnnotationCount(targetType: string, targetId: string): number {
+  if (!currentReviewVersion.value) return 0
+  return store.getAnnotationsForTarget(
+    currentReviewVersion.value.id,
+    targetType,
+    targetId
+  ).length
+}
 
 const allNotes = computed(() => {
   const baseNotes = processSheet.value.operationNotes
@@ -325,6 +364,17 @@ function switchView(mode: 'basic' | 'layers' | 'consumption') {
               <div class="color-dot" :style="{ backgroundColor: color.value }"></div>
               <span class="color-name">{{ color.name }}</span>
               <span class="color-hex">{{ color.value }}</span>
+              <button
+                v-if="currentReviewVersion"
+                class="annotation-btn"
+                @click="openAnnotationModal({ type: 'color', targetId: color.id })"
+                :title="`添加批注 (${getAnnotationCount('color', color.id)})`"
+              >
+                💬
+                <span v-if="getAnnotationCount('color', color.id) > 0" class="annotation-count">
+                  {{ getAnnotationCount('color', color.id) }}
+                </span>
+              </button>
             </div>
           </div>
           <p v-if="processSheet.usedColors.length === 0" class="empty-hint">
@@ -355,14 +405,27 @@ function switchView(mode: 'basic' | 'layers' | 'consumption') {
               :class="{ 'custom-note': index >= processSheet.operationNotes.length }"
             >
               <span class="note-text">{{ note }}</span>
-              <button
-                v-if="index >= processSheet.operationNotes.length"
-                class="note-delete"
-                @click="removeNote(index)"
-                title="删除"
-              >
-                ×
-              </button>
+              <div class="note-actions">
+                <button
+                  v-if="currentReviewVersion"
+                  class="annotation-btn small"
+                  @click="openAnnotationModal({ type: 'note', targetId: `note-${index}`, targetIndex: index })"
+                  :title="`添加批注 (${getAnnotationCount('note', `note-${index}`)})`"
+                >
+                  💬
+                  <span v-if="getAnnotationCount('note', `note-${index}`) > 0" class="annotation-count">
+                    {{ getAnnotationCount('note', `note-${index}`) }}
+                  </span>
+                </button>
+                <button
+                  v-if="index >= processSheet.operationNotes.length"
+                  class="note-delete"
+                  @click="removeNote(index)"
+                  title="删除"
+                >
+                  ×
+                </button>
+              </div>
             </li>
           </ul>
           <div class="add-note">
@@ -393,6 +456,17 @@ function switchView(mode: 'basic' | 'layers' | 'consumption') {
             <div class="layer-header">
               <span class="layer-order">#{{ index + 1 }}</span>
               <span class="layer-name">{{ layer.layerName }}</span>
+              <button
+                v-if="currentReviewVersion"
+                class="annotation-btn small"
+                @click="openAnnotationModal({ type: 'layer', targetId: layer.layerId, targetIndex: index })"
+                :title="`添加批注 (${getAnnotationCount('layer', layer.layerId)})`"
+              >
+                💬
+                <span v-if="getAnnotationCount('layer', layer.layerId) > 0" class="annotation-count">
+                  {{ getAnnotationCount('layer', layer.layerId) }}
+                </span>
+              </button>
             </div>
             <div class="layer-stats">
               <span class="layer-desc">{{ layer.description }}</span>
@@ -609,6 +683,26 @@ function switchView(mode: 'basic' | 'layers' | 'consumption') {
     <div class="print-footer">
       <p>生成时间：{{ new Date().toLocaleString('zh-CN') }}</p>
       <p>织带纹样设计器 · 工艺单自动生成</p>
+    </div>
+  </div>
+
+  <div v-if="showAnnotationModal" class="modal-overlay" @click.self="showAnnotationModal = false">
+    <div class="modal-content">
+      <h3 class="modal-title">添加批注</h3>
+      <div class="form-group">
+        <label class="form-label">批注内容</label>
+        <textarea
+          v-model="newAnnotationContent"
+          class="form-textarea"
+          placeholder="输入批注内容..."
+          rows="4"
+          autofocus
+        ></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="cancel-btn" @click="showAnnotationModal = false">取消</button>
+        <button class="confirm-btn" @click="handleAddAnnotation">添加</button>
+      </div>
     </div>
   </div>
 </template>
@@ -1384,6 +1478,151 @@ function switchView(mode: 'basic' | 'layers' | 'consumption') {
     p {
       margin: 4px 0;
     }
+  }
+}
+
+.annotation-btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border: none;
+  background: #f0f5ff;
+  color: #1890ff;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: #e6f0ff;
+  }
+
+  &.small {
+    padding: 1px 5px;
+    font-size: 11px;
+  }
+
+  .annotation-count {
+    background: #1890ff;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 8px;
+    min-width: 16px;
+    text-align: center;
+  }
+}
+
+.note-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 420px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #3d2c1e;
+  margin: 0 0 16px 0;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b5b47;
+  margin-bottom: 6px;
+}
+
+.form-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e8e0d5;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #3d2c1e;
+  background: #fff;
+  outline: none;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+  transition: all 0.2s ease;
+
+  &:focus {
+    border-color: #c84b31;
+  }
+
+  &::placeholder {
+    color: #a08b72;
+  }
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.cancel-btn {
+  padding: 6px 16px;
+  border: 1px solid #e8e0d5;
+  background: #fff;
+  color: #6b5b47;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: #faf7f2;
+  }
+}
+
+.confirm-btn {
+  padding: 6px 16px;
+  border: none;
+  background: #c84b31;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: #d65842;
   }
 }
 </style>

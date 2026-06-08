@@ -7,11 +7,20 @@ import type {
   ConsumptionItem,
   LayerItem,
   LayerConsumption,
+  LayerProcessInfo,
   ProcessSheetData,
   SchedulingStep,
   SchedulingData,
   SchedulingState,
-  ProcessSchedulingModule
+  ProcessSchedulingModule,
+  SampleVersion,
+  SampleVersionSnapshot,
+  Annotation,
+  ReviewComment,
+  ReviewModule,
+  ReviewStatus,
+  ComparisonResult,
+  DiffChangeItem
 } from '@/types'
 import { DEFAULT_COLORS, SCHEMA_VERSION } from '@/types'
 import {
@@ -68,6 +77,11 @@ export const usePatternStore = defineStore('pattern', () => {
 
   const schedulingState = ref<SchedulingState>(defaultSchedulingState())
   const processNotes = ref<string[]>([])
+
+  const reviewVersions = ref<SampleVersion[]>([])
+  const currentReviewVersionId = ref<string | null>(null)
+  const activeReviewTab = ref<'versions' | 'comparison' | 'annotations'>('versions')
+  const compareVersionIds = ref<[string, string] | null>(null)
 
   const history = ref<HistoryState[]>([])
   const historyIndex = ref(-1)
@@ -140,6 +154,24 @@ export const usePatternStore = defineStore('pattern', () => {
 
   const canUndo = computed(() => historyIndex.value > 0)
   const canRedo = computed(() => historyIndex.value < history.value.length - 1)
+
+  const currentReviewVersion = computed<SampleVersion | null>(() => {
+    if (!currentReviewVersionId.value) return null
+    return reviewVersions.value.find(v => v.id === currentReviewVersionId.value) || null
+  })
+
+  const sortedReviewVersions = computed<SampleVersion[]>(() => {
+    return [...reviewVersions.value].sort((a, b) => a.versionNumber - b.versionNumber)
+  })
+
+  const reviewComparisonResult = computed<ComparisonResult | null>(() => {
+    if (!compareVersionIds.value) return null
+    const [id1, id2] = compareVersionIds.value
+    const v1 = reviewVersions.value.find(v => v.id === id1)
+    const v2 = reviewVersions.value.find(v => v.id === id2)
+    if (!v1 || !v2) return null
+    return compareSampleVersions(v1, v2)
+  })
 
   function pauseHistory() {
     historyPaused = true
@@ -592,6 +624,13 @@ export const usePatternStore = defineStore('pattern', () => {
       notes: [...processNotes.value]
     }
 
+    const reviewModule: ReviewModule = {
+      versions: JSON.parse(JSON.stringify(reviewVersions.value)),
+      currentVersionId: currentReviewVersionId.value,
+      activeReviewTab: activeReviewTab.value,
+      compareVersionIds: compareVersionIds.value ? [...compareVersionIds.value] as [string, string] : null
+    }
+
     const schema: PatternSchema = {
       version: SCHEMA_VERSION,
       name: schemaName.value,
@@ -603,7 +642,8 @@ export const usePatternStore = defineStore('pattern', () => {
       activeLayerId: activeLayerId.value,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      processScheduling
+      processScheduling,
+      reviewModule
     }
 
     const filename = `${schemaName.value || '纹样方案'}-${Date.now()}.json`
@@ -662,10 +702,452 @@ export const usePatternStore = defineStore('pattern', () => {
       processNotes.value = []
     }
 
+    if (schema.reviewModule && Array.isArray(schema.reviewModule.versions)) {
+      const rm = schema.reviewModule
+      reviewVersions.value = JSON.parse(JSON.stringify(rm.versions))
+      currentReviewVersionId.value = typeof rm.currentVersionId === 'string'
+        ? rm.currentVersionId
+        : (reviewVersions.value[0]?.id || null)
+      activeReviewTab.value = rm.activeReviewTab || 'versions'
+      compareVersionIds.value = rm.compareVersionIds || null
+    } else {
+      reviewVersions.value = []
+      currentReviewVersionId.value = null
+      activeReviewTab.value = 'versions'
+      compareVersionIds.value = null
+    }
+
     resumeHistory()
     initHistory()
 
     return { success: true, errors: [] }
+  }
+
+  function generateVersionId(): string {
+    return `version-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  function generateAnnotationId(): string {
+    return `annotation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  function generateCommentId(): string {
+    return `comment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  function createCurrentSnapshot(): SampleVersionSnapshot {
+    return {
+      warpCount: warpCount.value,
+      weftCycle: weftCycle.value,
+      colors: JSON.parse(JSON.stringify(colors.value)),
+      grid: cloneGrid(composedGrid.value),
+      layers: layers.value.map(l => cloneLayer(l)),
+      processNotes: [...processNotes.value],
+      scheduling: {
+        completedStepIds: [...schedulingState.value.completedStepIds],
+        currentStepId: schedulingState.value.currentStepId,
+        filterColorId: schedulingState.value.filterColorId,
+        repeatCount: schedulingState.value.repeatCount
+      },
+      totalConsumption: JSON.parse(JSON.stringify(consumptionStats.value)),
+      layerConsumptions: JSON.parse(JSON.stringify(layerConsumptions.value)),
+      suggestedRepeats: processSheet.value.suggestedRepeats,
+      schedulingSteps: JSON.parse(JSON.stringify(schedulingSteps.value))
+    }
+  }
+
+  function createSampleVersion(name: string, description: string = '', assignee: string = '未分配'): SampleVersion {
+    const nextVersionNumber = reviewVersions.value.length + 1
+    const snapshot = createCurrentSnapshot()
+    
+    const version: SampleVersion = {
+      id: generateVersionId(),
+      versionNumber: nextVersionNumber,
+      name: name || `版本 ${nextVersionNumber}`,
+      description,
+      status: 'pending',
+      assignee,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      snapshot,
+      annotations: [],
+      comments: []
+    }
+    
+    reviewVersions.value.push(version)
+    currentReviewVersionId.value = version.id
+    
+    return version
+  }
+
+  function updateSampleVersion(versionId: string, data: Partial<SampleVersion>): boolean {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return false
+    
+    Object.assign(version, data, { updatedAt: new Date().toISOString() })
+    return true
+  }
+
+  function deleteSampleVersion(versionId: string): boolean {
+    const index = reviewVersions.value.findIndex(v => v.id === versionId)
+    if (index === -1) return false
+    
+    reviewVersions.value.splice(index, 1)
+    
+    reviewVersions.value.forEach((v, i) => {
+      v.versionNumber = i + 1
+    })
+    
+    if (currentReviewVersionId.value === versionId) {
+      currentReviewVersionId.value = reviewVersions.value[0]?.id || null
+    }
+    
+    if (compareVersionIds.value) {
+      const [id1, id2] = compareVersionIds.value
+      if (id1 === versionId || id2 === versionId) {
+        compareVersionIds.value = null
+      }
+    }
+    
+    return true
+  }
+
+  function setCurrentReviewVersion(versionId: string | null) {
+    if (versionId === null || reviewVersions.value.find(v => v.id === versionId)) {
+      currentReviewVersionId.value = versionId
+    }
+  }
+
+  function setActiveReviewTab(tab: 'versions' | 'comparison' | 'annotations') {
+    activeReviewTab.value = tab
+  }
+
+  function setCompareVersions(versionId1: string, versionId2: string) {
+    const v1 = reviewVersions.value.find(v => v.id === versionId1)
+    const v2 = reviewVersions.value.find(v => v.id === versionId2)
+    if (v1 && v2) {
+      compareVersionIds.value = [versionId1, versionId2]
+    }
+  }
+
+  function clearCompareVersions() {
+    compareVersionIds.value = null
+  }
+
+  function compareSampleVersions(v1: SampleVersion, v2: SampleVersion): ComparisonResult {
+    const s1 = v1.snapshot
+    const s2 = v2.snapshot
+    const patternDiffs: DiffChangeItem[] = []
+    let totalChanges = 0
+
+    if (s1.warpCount !== s2.warpCount) {
+      patternDiffs.push({
+        type: 'modified',
+        key: 'warpCount',
+        oldValue: s1.warpCount,
+        newValue: s2.warpCount
+      })
+      totalChanges++
+    }
+    if (s1.weftCycle !== s2.weftCycle) {
+      patternDiffs.push({
+        type: 'modified',
+        key: 'weftCycle',
+        oldValue: s1.weftCycle,
+        newValue: s2.weftCycle
+      })
+      totalChanges++
+    }
+
+    const colorDiffs: DiffChangeItem<ColorItem>[] = []
+    const colorMap1 = new Map(s1.colors.map(c => [c.id, c]))
+    const colorMap2 = new Map(s2.colors.map(c => [c.id, c]))
+    const allColorIds = new Set([...colorMap1.keys(), ...colorMap2.keys()])
+    
+    allColorIds.forEach(id => {
+      const c1 = colorMap1.get(id)
+      const c2 = colorMap2.get(id)
+      if (c1 && !c2) {
+        colorDiffs.push({ type: 'removed', key: id, oldValue: c1 })
+        totalChanges++
+      } else if (!c1 && c2) {
+        colorDiffs.push({ type: 'added', key: id, newValue: c2 })
+        totalChanges++
+      } else if (c1 && c2 && (c1.name !== c2.name || c1.value !== c2.value)) {
+        colorDiffs.push({ type: 'modified', key: id, oldValue: c1, newValue: c2 })
+        totalChanges++
+      }
+    })
+
+    const consumptionDiffs: DiffChangeItem<ConsumptionItem>[] = []
+    const consMap1 = new Map(s1.totalConsumption.map(c => [c.colorId, c]))
+    const consMap2 = new Map(s2.totalConsumption.map(c => [c.colorId, c]))
+    const allConsIds = new Set([...consMap1.keys(), ...consMap2.keys()])
+    
+    allConsIds.forEach(id => {
+      const c1 = consMap1.get(id)
+      const c2 = consMap2.get(id)
+      if (c1 && !c2) {
+        consumptionDiffs.push({ type: 'removed', key: id, oldValue: c1 })
+        totalChanges++
+      } else if (!c1 && c2) {
+        consumptionDiffs.push({ type: 'added', key: id, newValue: c2 })
+        totalChanges++
+      } else if (c1 && c2 && (c1.count !== c2.count || c1.percentage !== c2.percentage)) {
+        consumptionDiffs.push({ type: 'modified', key: id, oldValue: c1, newValue: c2 })
+        totalChanges++
+      }
+    })
+
+    const suggestedRepeatsDiff: DiffChangeItem<number> = {
+      type: s1.suggestedRepeats === s2.suggestedRepeats ? 'unchanged' : 'modified',
+      key: 'suggestedRepeats',
+      oldValue: s1.suggestedRepeats,
+      newValue: s2.suggestedRepeats
+    }
+    if (suggestedRepeatsDiff.type === 'modified') totalChanges++
+
+    function getLayerCellCount(layer: LayerItem): number {
+      let count = 0
+      layer.grid.forEach(row => {
+        row.forEach(cell => {
+          if (cell !== null) count++
+        })
+      })
+      return count
+    }
+
+    function toLayerProcessInfo(layer: LayerItem, index: number): LayerProcessInfo {
+      return {
+        layerId: layer.id,
+        layerName: layer.name,
+        description: `图层 ${index + 1}`,
+        cellCount: getLayerCellCount(layer)
+      }
+    }
+
+    const layerDiffs: DiffChangeItem<LayerProcessInfo>[] = []
+    const layerMap1 = new Map(s1.layers.map((l, i) => [l.id, toLayerProcessInfo(l, i)]))
+    const layerMap2 = new Map(s2.layers.map((l, i) => [l.id, toLayerProcessInfo(l, i)]))
+    const allLayerIds = new Set([...layerMap1.keys(), ...layerMap2.keys()])
+    
+    allLayerIds.forEach(id => {
+      const l1 = layerMap1.get(id)
+      const l2 = layerMap2.get(id)
+      if (l1 && !l2) {
+        layerDiffs.push({ type: 'removed', key: id, oldValue: l1 })
+        totalChanges++
+      } else if (!l1 && l2) {
+        layerDiffs.push({ type: 'added', key: id, newValue: l2 })
+        totalChanges++
+      } else if (l1 && l2 && (l1.layerName !== l2.layerName || l1.cellCount !== l2.cellCount)) {
+        layerDiffs.push({ type: 'modified', key: id, oldValue: l1, newValue: l2 })
+        totalChanges++
+      }
+    })
+
+    const stepDiffs: DiffChangeItem<SchedulingStep>[] = []
+    const stepMap1 = new Map(s1.schedulingSteps.map(s => [s.id, s]))
+    const stepMap2 = new Map(s2.schedulingSteps.map(s => [s.id, s]))
+    const allStepIds = new Set([...stepMap1.keys(), ...stepMap2.keys()])
+    
+    allStepIds.forEach(id => {
+      const st1 = stepMap1.get(id)
+      const st2 = stepMap2.get(id)
+      if (st1 && !st2) {
+        stepDiffs.push({ type: 'removed', key: id, oldValue: st1 })
+        totalChanges++
+      } else if (!st1 && st2) {
+        stepDiffs.push({ type: 'added', key: id, newValue: st2 })
+        totalChanges++
+      } else if (st1 && st2 && (
+        st1.description !== st2.description ||
+        st1.colorId !== st2.colorId ||
+        st1.warpPositions.length !== st2.warpPositions.length ||
+        JSON.stringify(st1.warpPositions) !== JSON.stringify(st2.warpPositions)
+      )) {
+        stepDiffs.push({ type: 'modified', key: id, oldValue: st1, newValue: st2 })
+        totalChanges++
+      }
+    })
+
+    const noteDiffs: DiffChangeItem<string>[] = []
+    const maxLen = Math.max(s1.processNotes.length, s2.processNotes.length)
+    for (let i = 0; i < maxLen; i++) {
+      const n1 = s1.processNotes[i]
+      const n2 = s2.processNotes[i]
+      if (n1 === undefined && n2 !== undefined) {
+        noteDiffs.push({ type: 'added', key: `note-${i}`, newValue: n2 })
+        totalChanges++
+      } else if (n1 !== undefined && n2 === undefined) {
+        noteDiffs.push({ type: 'removed', key: `note-${i}`, oldValue: n1 })
+        totalChanges++
+      } else if (n1 !== n2) {
+        noteDiffs.push({ type: 'modified', key: `note-${i}`, oldValue: n1, newValue: n2 })
+        totalChanges++
+      }
+    }
+
+    return {
+      pattern: patternDiffs,
+      colors: colorDiffs,
+      consumption: consumptionDiffs,
+      suggestedRepeats: suggestedRepeatsDiff,
+      layers: layerDiffs,
+      schedulingSteps: stepDiffs,
+      notes: noteDiffs,
+      totalChanges
+    }
+  }
+
+  function addAnnotation(versionId: string, target: Annotation['target'], content: string, author: string = '当前用户'): Annotation | null {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return null
+
+    const annotation: Annotation = {
+      id: generateAnnotationId(),
+      target,
+      content,
+      author,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      resolved: false
+    }
+
+    version.annotations.push(annotation)
+    version.updatedAt = new Date().toISOString()
+    return annotation
+  }
+
+  function updateAnnotation(versionId: string, annotationId: string, content: string): boolean {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return false
+
+    const annotation = version.annotations.find(a => a.id === annotationId)
+    if (!annotation) return false
+
+    annotation.content = content
+    annotation.updatedAt = new Date().toISOString()
+    version.updatedAt = new Date().toISOString()
+    return true
+  }
+
+  function deleteAnnotation(versionId: string, annotationId: string): boolean {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return false
+
+    const index = version.annotations.findIndex(a => a.id === annotationId)
+    if (index === -1) return false
+
+    version.annotations.splice(index, 1)
+    version.updatedAt = new Date().toISOString()
+    return true
+  }
+
+  function resolveAnnotation(versionId: string, annotationId: string, resolvedBy: string = '当前用户'): boolean {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return false
+
+    const annotation = version.annotations.find(a => a.id === annotationId)
+    if (!annotation) return false
+
+    annotation.resolved = true
+    annotation.resolvedAt = new Date().toISOString()
+    annotation.resolvedBy = resolvedBy
+    version.updatedAt = new Date().toISOString()
+    return true
+  }
+
+  function unresolveAnnotation(versionId: string, annotationId: string): boolean {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return false
+
+    const annotation = version.annotations.find(a => a.id === annotationId)
+    if (!annotation) return false
+
+    annotation.resolved = false
+    annotation.resolvedAt = undefined
+    annotation.resolvedBy = undefined
+    version.updatedAt = new Date().toISOString()
+    return true
+  }
+
+  function addReviewComment(versionId: string, content: string, author: string = '当前用户'): ReviewComment | null {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return null
+
+    const comment: ReviewComment = {
+      id: generateCommentId(),
+      author,
+      content,
+      createdAt: new Date().toISOString(),
+      resolved: false
+    }
+
+    version.comments.push(comment)
+    version.updatedAt = new Date().toISOString()
+    return comment
+  }
+
+  function updateReviewStatus(versionId: string, status: ReviewStatus): boolean {
+    return updateSampleVersion(versionId, { status })
+  }
+
+  function updateReviewConclusion(versionId: string, conclusion: string, reviewedBy: string = '当前用户'): boolean {
+    return updateSampleVersion(versionId, {
+      reviewConclusion: conclusion,
+      reviewedAt: new Date().toISOString(),
+      reviewedBy
+    })
+  }
+
+  function getAnnotationsForTarget(versionId: string, targetType: string, targetId: string): Annotation[] {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return []
+    return version.annotations.filter(
+      a => a.target.type === targetType && a.target.targetId === targetId
+    )
+  }
+
+  function exportReviewReport(versionId: string): { success: boolean; data?: unknown; error?: string } {
+    const version = reviewVersions.value.find(v => v.id === versionId)
+    if (!version) return { success: false, error: '版本不存在' }
+
+    const report = {
+      versionInfo: {
+        id: version.id,
+        versionNumber: version.versionNumber,
+        name: version.name,
+        description: version.description,
+        status: version.status,
+        assignee: version.assignee,
+        createdAt: version.createdAt,
+        updatedAt: version.updatedAt,
+        reviewConclusion: version.reviewConclusion,
+        reviewedAt: version.reviewedAt,
+        reviewedBy: version.reviewedBy
+      },
+      snapshot: version.snapshot,
+      annotations: version.annotations,
+      comments: version.comments,
+      annotationStats: {
+        total: version.annotations.length,
+        resolved: version.annotations.filter(a => a.resolved).length,
+        unresolved: version.annotations.filter(a => !a.resolved).length
+      }
+    }
+
+    return { success: true, data: report }
+  }
+
+  function exportReviewModuleAsJson() {
+    const reviewModule: ReviewModule = {
+      versions: JSON.parse(JSON.stringify(reviewVersions.value)),
+      currentVersionId: currentReviewVersionId.value,
+      activeReviewTab: activeReviewTab.value,
+      compareVersionIds: compareVersionIds.value ? [...compareVersionIds.value] as [string, string] : null
+    }
+    return reviewModule
   }
 
   function resetToDefault() {
@@ -683,6 +1165,10 @@ export const usePatternStore = defineStore('pattern', () => {
     clipboard.value = null
     schedulingState.value = defaultSchedulingState()
     processNotes.value = []
+    reviewVersions.value = []
+    currentReviewVersionId.value = null
+    activeReviewTab.value = 'versions'
+    compareVersionIds.value = null
     resumeHistory()
     initHistory()
   }
@@ -757,6 +1243,32 @@ export const usePatternStore = defineStore('pattern', () => {
     addProcessNote,
     removeProcessNote,
     updateProcessNote,
+    reviewVersions,
+    currentReviewVersionId,
+    currentReviewVersion,
+    sortedReviewVersions,
+    activeReviewTab,
+    compareVersionIds,
+    reviewComparisonResult,
+    createSampleVersion,
+    updateSampleVersion,
+    deleteSampleVersion,
+    setCurrentReviewVersion,
+    setActiveReviewTab,
+    setCompareVersions,
+    clearCompareVersions,
+    compareSampleVersions,
+    addAnnotation,
+    updateAnnotation,
+    deleteAnnotation,
+    resolveAnnotation,
+    unresolveAnnotation,
+    getAnnotationsForTarget,
+    addReviewComment,
+    updateReviewStatus,
+    updateReviewConclusion,
+    exportReviewReport,
+    exportReviewModuleAsJson,
     saveHistory,
     pauseHistory,
     resumeHistory,

@@ -5,7 +5,8 @@ import type {
   BeatGrid,
   LayerItem,
   ProcessSchedulingModule,
-  SchedulingState
+  SchedulingState,
+  ReviewStatus
 } from '@/types'
 
 const HEX_COLOR_REGEX = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/
@@ -232,6 +233,271 @@ export function validateProcessSchedulingModule(
   return errors
 }
 
+const VALID_REVIEW_STATUSES: ReviewStatus[] = ['pending', 'in-review', 'approved', 'rejected', 'needs-revision']
+
+export function validateReviewStatus(status: unknown): boolean {
+  return typeof status === 'string' && VALID_REVIEW_STATUSES.includes(status as ReviewStatus)
+}
+
+export function validateAnnotationTarget(target: unknown): string[] {
+  const errors: string[] = []
+  
+  if (!target || typeof target !== 'object') {
+    errors.push('批注目标数据格式无效')
+    return errors
+  }
+  
+  const t = target as Record<string, unknown>
+  
+  const validTypes = ['note', 'color', 'layer', 'scheduling-step']
+  if (!t.type || typeof t.type !== 'string' || !validTypes.includes(t.type)) {
+    errors.push('批注目标类型无效')
+  }
+  
+  if (!t.targetId || typeof t.targetId !== 'string') {
+    errors.push('批注目标 ID 无效')
+  }
+  
+  if (t.targetIndex !== undefined && !Number.isInteger(t.targetIndex)) {
+    errors.push('批注目标索引格式无效')
+  }
+  
+  return errors
+}
+
+export function validateAnnotation(annotation: unknown, index: number): string[] {
+  const errors: string[] = []
+  const prefix = `第 ${index + 1} 个批注`
+  
+  if (!annotation || typeof annotation !== 'object') {
+    errors.push(`${prefix}数据格式无效`)
+    return errors
+  }
+  
+  const a = annotation as Record<string, unknown>
+  
+  if (!a.id || typeof a.id !== 'string') {
+    errors.push(`${prefix}缺少有效的 id`)
+  }
+  
+  if (a.target !== undefined) {
+    const targetErrors = validateAnnotationTarget(a.target)
+    targetErrors.forEach(err => errors.push(`${prefix} - ${err}`))
+  }
+  
+  if (!a.content || typeof a.content !== 'string') {
+    errors.push(`${prefix}缺少内容`)
+  }
+  
+  if (!a.author || typeof a.author !== 'string') {
+    errors.push(`${prefix}缺少作者信息`)
+  }
+  
+  if (!a.createdAt || typeof a.createdAt !== 'string') {
+    errors.push(`${prefix}缺少创建时间`)
+  }
+  
+  if (typeof a.resolved !== 'boolean') {
+    errors.push(`${prefix}的 resolved 字段无效`)
+  }
+  
+  return errors
+}
+
+export function validateReviewComment(comment: unknown, index: number): string[] {
+  const errors: string[] = []
+  const prefix = `第 ${index + 1} 条评论`
+  
+  if (!comment || typeof comment !== 'object') {
+    errors.push(`${prefix}数据格式无效`)
+    return errors
+  }
+  
+  const c = comment as Record<string, unknown>
+  
+  if (!c.id || typeof c.id !== 'string') {
+    errors.push(`${prefix}缺少有效的 id`)
+  }
+  
+  if (!c.author || typeof c.author !== 'string') {
+    errors.push(`${prefix}缺少作者信息`)
+  }
+  
+  if (!c.content || typeof c.content !== 'string') {
+    errors.push(`${prefix}缺少内容`)
+  }
+  
+  if (!c.createdAt || typeof c.createdAt !== 'string') {
+    errors.push(`${prefix}缺少创建时间`)
+  }
+  
+  if (typeof c.resolved !== 'boolean') {
+    errors.push(`${prefix}的 resolved 字段无效`)
+  }
+  
+  return errors
+}
+
+export function validateSampleVersionSnapshot(snapshot: unknown, colors: ColorItem[]): string[] {
+  const errors: string[] = []
+  
+  if (!snapshot || typeof snapshot !== 'object') {
+    errors.push('版本快照数据格式无效')
+    return errors
+  }
+  
+  const s = snapshot as Record<string, unknown>
+  
+  if (typeof s.warpCount !== 'number' || !validatePositiveInteger(s.warpCount)) {
+    errors.push('版本快照中经线数量无效')
+  }
+  
+  if (typeof s.weftCycle !== 'number' || !validatePositiveInteger(s.weftCycle)) {
+    errors.push('版本快照中纬线周期无效')
+  }
+  
+  if (Array.isArray(s.colors)) {
+    const colorErrors = validateColors(s.colors as ColorItem[])
+    colorErrors.forEach(err => errors.push(`版本快照 - ${err}`))
+  }
+  
+  if (s.grid !== undefined) {
+    const gridErrors = validateGrid(
+      s.grid as BeatGrid,
+      (s.warpCount as number) || 0,
+      (s.weftCycle as number) || 0,
+      colors
+    )
+    gridErrors.forEach(err => errors.push(`版本快照 - ${err}`))
+  }
+  
+  if (Array.isArray(s.processNotes)) {
+    s.processNotes.forEach((note: unknown, i: number) => {
+      if (typeof note !== 'string') {
+        errors.push(`版本快照 - 第 ${i + 1} 条备注格式无效`)
+      }
+    })
+  }
+  
+  return errors
+}
+
+export function validateSampleVersion(version: unknown, index: number, colors: ColorItem[]): string[] {
+  const errors: string[] = []
+  const prefix = `第 ${index + 1} 个打样版本`
+  
+  if (!version || typeof version !== 'object') {
+    errors.push(`${prefix}数据格式无效`)
+    return errors
+  }
+  
+  const v = version as Record<string, unknown>
+  
+  if (!v.id || typeof v.id !== 'string') {
+    errors.push(`${prefix}缺少有效的 id`)
+  }
+  
+  if (typeof v.versionNumber !== 'number' || !validatePositiveInteger(v.versionNumber)) {
+    errors.push(`${prefix}版本号无效`)
+  }
+  
+  if (!v.name || typeof v.name !== 'string') {
+    errors.push(`${prefix}缺少名称`)
+  }
+  
+  if (typeof v.description !== 'string') {
+    errors.push(`${prefix}描述格式无效`)
+  }
+  
+  if (!validateReviewStatus(v.status)) {
+    errors.push(`${prefix}评审状态无效`)
+  }
+  
+  if (!v.assignee || typeof v.assignee !== 'string') {
+    errors.push(`${prefix}缺少负责人信息`)
+  }
+  
+  if (!v.createdAt || typeof v.createdAt !== 'string') {
+    errors.push(`${prefix}缺少创建时间`)
+  }
+  
+  if (!v.updatedAt || typeof v.updatedAt !== 'string') {
+    errors.push(`${prefix}缺少更新时间`)
+  }
+  
+  if (v.snapshot !== undefined) {
+    const snapshotErrors = validateSampleVersionSnapshot(v.snapshot, colors)
+    snapshotErrors.forEach(err => errors.push(`${prefix} - ${err}`))
+  }
+  
+  if (v.reviewConclusion !== undefined && typeof v.reviewConclusion !== 'string') {
+    errors.push(`${prefix}评审结论格式无效`)
+  }
+  
+  if (v.reviewedAt !== undefined && typeof v.reviewedAt !== 'string') {
+    errors.push(`${prefix}评审时间格式无效`)
+  }
+  
+  if (v.reviewedBy !== undefined && typeof v.reviewedBy !== 'string') {
+    errors.push(`${prefix}评审人格式无效`)
+  }
+  
+  if (Array.isArray(v.annotations)) {
+    v.annotations.forEach((annotation: unknown, i: number) => {
+      const annotationErrors = validateAnnotation(annotation, i)
+      annotationErrors.forEach(err => errors.push(`${prefix} - ${err}`))
+    })
+  }
+  
+  if (Array.isArray(v.comments)) {
+    v.comments.forEach((comment: unknown, i: number) => {
+      const commentErrors = validateReviewComment(comment, i)
+      commentErrors.forEach(err => errors.push(`${prefix} - ${err}`))
+    })
+  }
+  
+  return errors
+}
+
+export function validateReviewModule(module: unknown, colors: ColorItem[]): string[] {
+  const errors: string[] = []
+  
+  if (!module || typeof module !== 'object') {
+    errors.push('评审模块数据格式无效')
+    return errors
+  }
+  
+  const m = module as Record<string, unknown>
+  
+  if (!Array.isArray(m.versions)) {
+    errors.push('打样版本列表格式无效')
+  } else {
+    m.versions.forEach((version: unknown, index: number) => {
+      const versionErrors = validateSampleVersion(version, index, colors)
+      versionErrors.forEach(err => errors.push(err))
+    })
+  }
+  
+  if (m.currentVersionId !== undefined && m.currentVersionId !== null && typeof m.currentVersionId !== 'string') {
+    errors.push('当前版本 ID 格式无效')
+  }
+  
+  if (m.activeReviewTab !== undefined) {
+    const validTabs = ['versions', 'comparison', 'annotations']
+    if (typeof m.activeReviewTab !== 'string' || !validTabs.includes(m.activeReviewTab)) {
+      errors.push('评审面板标签页格式无效')
+    }
+  }
+  
+  if (m.compareVersionIds !== undefined && m.compareVersionIds !== null) {
+    if (!Array.isArray(m.compareVersionIds) || m.compareVersionIds.length !== 2) {
+      errors.push('对比版本 ID 格式无效')
+    }
+  }
+  
+  return errors
+}
+
 export function validatePatternSchema(schema: unknown): ValidationResult {
   const errors: string[] = []
 
@@ -284,6 +550,11 @@ export function validatePatternSchema(schema: unknown): ValidationResult {
   if (data.processScheduling !== undefined && errors.length === 0) {
     const psErrors = validateProcessSchedulingModule(data.processScheduling, colors)
     errors.push(...psErrors)
+  }
+
+  if (data.reviewModule !== undefined && errors.length === 0) {
+    const rmErrors = validateReviewModule(data.reviewModule, colors)
+    errors.push(...rmErrors)
   }
 
   return { valid: errors.length === 0, errors }

@@ -9,10 +9,11 @@ import ConsumptionChart from '@/components/ConsumptionChart.vue'
 import LayerPanel from '@/components/LayerPanel.vue'
 import ProcessSheetPanel from '@/components/ProcessSheetPanel.vue'
 import SchedulingView from '@/components/SchedulingView.vue'
+import ReviewPanel from '@/components/ReviewPanel.vue'
 
 const theme = computed(() => undefined)
 
-type RightPanelTab = 'preview' | 'process' | 'scheduling'
+type RightPanelTab = 'preview' | 'process' | 'scheduling' | 'review'
 const activeRightTab = ref<RightPanelTab>('preview')
 
 function switchRightTab(tab: RightPanelTab) {
@@ -63,6 +64,14 @@ function switchRightTab(tab: RightPanelTab) {
                   <span class="tab-icon">🧵</span>
                   生产排线
                 </button>
+                <button
+                  class="tab-btn"
+                  :class="{ active: activeRightTab === 'review' }"
+                  @click="switchRightTab('review')"
+                >
+                  <span class="tab-icon">🔍</span>
+                  打样评审
+                </button>
               </div>
 
               <div class="right-panel-content">
@@ -75,6 +84,9 @@ function switchRightTab(tab: RightPanelTab) {
                 </div>
                 <div v-show="activeRightTab === 'scheduling'" class="tab-content">
                   <SchedulingView />
+                </div>
+                <div v-show="activeRightTab === 'review'" class="tab-content">
+                  <ReviewPanel />
                 </div>
               </div>
             </aside>

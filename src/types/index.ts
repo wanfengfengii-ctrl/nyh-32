@@ -28,6 +28,7 @@ export interface PatternSchema {
   createdAt: string
   updatedAt: string
   processScheduling?: ProcessSchedulingModule
+  reviewModule?: ReviewModule
 }
 
 export interface ConsumptionItem {
@@ -49,7 +50,93 @@ export interface ValidationResult {
   errors: string[]
 }
 
-export const SCHEMA_VERSION = '2.1.0'
+export const SCHEMA_VERSION = '3.0.0'
+
+export type ReviewStatus = 'pending' | 'in-review' | 'approved' | 'rejected' | 'needs-revision'
+
+export interface ReviewComment {
+  id: string
+  author: string
+  content: string
+  createdAt: string
+  resolved: boolean
+  resolvedAt?: string
+  resolvedBy?: string
+}
+
+export interface AnnotationTarget {
+  type: 'note' | 'color' | 'layer' | 'scheduling-step'
+  targetId: string
+  targetIndex?: number
+}
+
+export interface Annotation {
+  id: string
+  target: AnnotationTarget
+  content: string
+  author: string
+  createdAt: string
+  updatedAt: string
+  resolved: boolean
+  resolvedAt?: string
+  resolvedBy?: string
+}
+
+export interface SampleVersionSnapshot {
+  warpCount: number
+  weftCycle: number
+  colors: ColorItem[]
+  grid: BeatGrid
+  layers: LayerItem[]
+  processNotes: string[]
+  scheduling: SchedulingState
+  totalConsumption: ConsumptionItem[]
+  layerConsumptions: LayerConsumption[]
+  suggestedRepeats: number
+  schedulingSteps: SchedulingStep[]
+}
+
+export interface SampleVersion {
+  id: string
+  versionNumber: number
+  name: string
+  description: string
+  status: ReviewStatus
+  assignee: string
+  createdAt: string
+  updatedAt: string
+  snapshot: SampleVersionSnapshot
+  reviewConclusion?: string
+  reviewedAt?: string
+  reviewedBy?: string
+  annotations: Annotation[]
+  comments: ReviewComment[]
+}
+
+export interface ReviewModule {
+  versions: SampleVersion[]
+  currentVersionId: string | null
+  activeReviewTab: 'versions' | 'comparison' | 'annotations'
+  compareVersionIds: [string, string] | null
+}
+
+export interface DiffChangeItem<T = unknown> {
+  type: 'added' | 'removed' | 'modified' | 'unchanged'
+  key: string
+  oldValue?: T
+  newValue?: T
+}
+
+export interface ComparisonResult {
+  pattern: DiffChangeItem[]
+  colors: DiffChangeItem<ColorItem>[]
+  consumption: DiffChangeItem<ConsumptionItem>[]
+  suggestedRepeats: DiffChangeItem<number>
+  layers: DiffChangeItem<LayerProcessInfo>[]
+  schedulingSteps: DiffChangeItem<SchedulingStep>[]
+  notes: DiffChangeItem<string>[]
+  totalChanges: number
+}
 
 export interface LayerProcessInfo {
   layerId: string
