@@ -1,27 +1,71 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import { usePatternStore } from '@/stores/pattern'
 import { storeToRefs } from 'pinia'
 import { validateHexColor } from '@/utils/validator'
+import { useMessage } from 'naive-ui'
 
 const store = usePatternStore()
+const message = useMessage()
 const { warpCount, weftCycle, colors, currentColorId } = storeToRefs(store)
 
 const editingColorId = ref<string | null>(null)
+const editingColorName = ref('')
+const editingColorNameBackup = ref('')
 const newColorName = ref('')
 const newColorValue = ref('#C84B31')
 const showAddColor = ref(false)
 
+const WARP_MIN = 1
+const WARP_MAX = 200
+const WEFT_MIN = 1
+const WEFT_MAX = 100
+
+const warpInputRef = ref<HTMLInputElement | null>(null)
+const weftInputRef = ref<HTMLInputElement | null>(null)
+
 function handleWarpChange(value: number) {
-  if (value > 0 && Number.isInteger(value)) {
-    store.setWarpCount(value)
+  if (!Number.isInteger(value)) {
+    message.error('经线数量必须是整数')
+    resetWarpInput()
+    return
   }
+  if (value < WARP_MIN || value > WARP_MAX) {
+    message.error(`经线数量必须在 ${WARP_MIN} - ${WARP_MAX} 之间`)
+    resetWarpInput()
+    return
+  }
+  store.setWarpCount(value)
 }
 
 function handleWeftChange(value: number) {
-  if (value > 0 && Number.isInteger(value)) {
-    store.setWeftCycle(value)
+  if (!Number.isInteger(value)) {
+    message.error('纬线循环周期必须是整数')
+    resetWeftInput()
+    return
   }
+  if (value < WEFT_MIN || value > WEFT_MAX) {
+    message.error(`纬线循环周期必须在 ${WEFT_MIN} - ${WEFT_MAX} 之间`)
+    resetWeftInput()
+    return
+  }
+  store.setWeftCycle(value)
+}
+
+function resetWarpInput() {
+  nextTick(() => {
+    if (warpInputRef.value) {
+      warpInputRef.value.value = String(warpCount.value)
+    }
+  })
+}
+
+function resetWeftInput() {
+  nextTick(() => {
+    if (weftInputRef.value) {
+      weftInputRef.value.value = String(weftCycle.value)
+    }
+  })
 }
 
 function selectColor(colorId: string) {
@@ -29,15 +73,31 @@ function selectColor(colorId: string) {
 }
 
 function startEditColor(colorId: string) {
+  const color = colors.value.find(c => c.id === colorId)
+  if (color) {
+    editingColorName.value = color.name
+    editingColorNameBackup.value = color.name
+  }
   editingColorId.value = colorId
 }
 
 function finishEditColor() {
+  if (editingColorId.value) {
+    const trimmedName = editingColorName.value.trim()
+    if (!trimmedName) {
+      message.error('颜色名称不能为空')
+      editingColorName.value = editingColorNameBackup.value
+    } else {
+      store.updateColor(editingColorId.value, { name: trimmedName })
+    }
+  }
   editingColorId.value = null
+  editingColorName.value = ''
+  editingColorNameBackup.value = ''
 }
 
 function updateColorName(colorId: string, name: string) {
-  store.updateColor(colorId, { name })
+  editingColorName.value = name
 }
 
 function updateColorValue(colorId: string, value: string) {
@@ -93,16 +153,18 @@ function canRemoveColor(): boolean {
             −
           </button>
           <input
+            ref="warpInputRef"
             type="number"
             class="param-input"
             :value="warpCount"
-            min="1"
-            max="200"
+            :min="WARP_MIN"
+            :max="WARP_MAX"
             @change="e => handleWarpChange(Number((e.target as HTMLInputElement).value))"
+            @blur="e => handleWarpChange(Number((e.target as HTMLInputElement).value))"
           />
           <button
             class="param-btn"
-            :disabled="warpCount >= 200"
+            :disabled="warpCount >= WARP_MAX"
             @click="handleWarpChange(warpCount + 1)"
           >
             +
@@ -122,16 +184,18 @@ function canRemoveColor(): boolean {
             −
           </button>
           <input
+            ref="weftInputRef"
             type="number"
             class="param-input"
             :value="weftCycle"
-            min="1"
-            max="100"
+            :min="WEFT_MIN"
+            :max="WEFT_MAX"
             @change="e => handleWeftChange(Number((e.target as HTMLInputElement).value))"
+            @blur="e => handleWeftChange(Number((e.target as HTMLInputElement).value))"
           />
           <button
             class="param-btn"
-            :disabled="weftCycle >= 100"
+            :disabled="weftCycle >= WEFT_MAX"
             @click="handleWeftChange(weftCycle + 1)"
           >
             +
@@ -167,10 +231,10 @@ function canRemoveColor(): boolean {
 
           <div v-if="editingColorId === color.id" class="color-edit" @click.stop>
             <input
+              ref="colorNameInputRef"
               type="text"
               class="color-name-input"
-              :value="color.name"
-              @input="e => updateColorName(color.id, (e.target as HTMLInputElement).value)"
+              v-model="editingColorName"
               @blur="finishEditColor"
               @keyup.enter="finishEditColor"
             />

@@ -8,7 +8,12 @@ import {
   calculateConsumption,
   downloadJsonFile
 } from '@/utils/pattern'
-import { validatePatternSchema, generateColorId } from '@/utils/validator'
+import { validatePatternSchema, generateColorId, validatePositiveInteger } from '@/utils/validator'
+
+const WARP_MIN = 1
+const WARP_MAX = 200
+const WEFT_MIN = 1
+const WEFT_MAX = 100
 
 export const usePatternStore = defineStore('pattern', () => {
   const warpCount = ref(16)
@@ -40,19 +45,22 @@ export const usePatternStore = defineStore('pattern', () => {
   })
 
   function setWarpCount(count: number) {
-    if (count <= 0) return
-    const oldWarp = warpCount.value
+    if (!validatePositiveInteger(count)) return false
+    if (count < WARP_MIN || count > WARP_MAX) return false
     warpCount.value = count
     grid.value = resizeGrid(grid.value, count, weftCycle.value)
     if (!colors.value.find(c => c.id === currentColorId.value)) {
       currentColorId.value = colors.value[0]?.id || ''
     }
+    return true
   }
 
   function setWeftCycle(cycle: number) {
-    if (cycle <= 0) return
+    if (!validatePositiveInteger(cycle)) return false
+    if (cycle < WEFT_MIN || cycle > WEFT_MAX) return false
     weftCycle.value = cycle
     grid.value = resizeGrid(grid.value, warpCount.value, cycle)
+    return true
   }
 
   function setCurrentColor(colorId: string) {
